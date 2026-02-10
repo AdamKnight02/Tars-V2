@@ -1,0 +1,237 @@
+package com.tarsv2;
+
+import com.tarsv2.agent.*;
+import com.tarsv2.approval.ApprovalGate;
+import com.tarsv2.improvement.SelfImprovementLoop;
+import com.tarsv2.llm.DualLlmOrchestrator;
+import com.tarsv2.llm.LlmClient;
+import com.tarsv2.llm.LlmRole;
+import com.tarsv2.personality.*;
+import com.tarsv2.podman.PodmanController;
+import com.tarsv2.sandbox.GitStagingService;
+import com.tarsv2.sandbox.SandboxEnvironment;
+import com.tarsv2.task.ExampleMockScrapeTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Option;
+
+import java.nio.file.Path;
+import java.util.Scanner;
+
+/**
+ * TARS v2 — Main CLI entry point.
+ *
+ * <p>Boots the full agent system: personality engine, approval gate,
+ * sandbox, Podman controller, dual-LLM orchestrator, agents, and
+ * self-improvement loop.</p>
+ *
+ * <p>Example startup output:</p>
+ * <pre>
+ * ╔═══════════════════════════════════════════════════════╗
+ * ║          TARS v2 — Autonomous Agent System            ║
+ * ║   "Spinning up like a caffeinated dolphin" 🐬☕        ║
+ * ╚═══════════════════════════════════════════════════════╝
+ *
+ * [TARS | mood=CURIOUS] Systems online. What are we working on today?
+ * </pre>
+ */
+@Command(
+        name = "tars",
+        mixinStandardHelpOptions = true,
+        version = "TARS v2 0.1.0-SNAPSHOT",
+        description = "Human-approved, self-improving autonomous agent with personality."
+)
+public final class TarsCli implements Runnable {
+
+    private static final Logger log = LoggerFactory.getLogger(TarsCli.class);
+
+    @Option(names = {"-H", "--humor"}, description = "Humor level: MINIMAL, LOW, MEDIUM, HIGH, MAXIMUM",
+            defaultValue = "MEDIUM")
+    private HumorLevel humorLevel;
+
+    @Option(names = {"--sandbox-dir"}, description = "Sandbox working directory",
+            defaultValue = "/tmp/tars-sandbox")
+    private String sandboxDir;
+
+    @Option(names = {"--actor-endpoint"}, description = "Actor LLM endpoint URL",
+            defaultValue = "http://localhost:11434/api/generate")
+    private String actorEndpoint;
+
+    @Option(names = {"--reflector-endpoint"}, description = "Reflector LLM endpoint URL",
+            defaultValue = "http://localhost:11435/api/generate")
+    private String reflectorEndpoint;
+
+    /**
+     * Main entry point.
+     *
+     * @param args CLI arguments
+     */
+    public static void main(String[] args) {
+        int exitCode = new CommandLine(new TarsCli()).execute(args);
+        System.exit(exitCode);
+    }
+
+    @Override
+    public void run() {
+        // ── Personality ──────────────────────────────────────────
+        PersonalityProfile profile = new PersonalityProfile("TARS", humorLevel, EmotionState.NEUTRAL);
+        DialogueStyle dialogue = new DialogueStyle(profile);
+
+        printBanner(dialogue);
+        profile.transitionEmotion(EmotionState.CURIOUS);
+        dialogue.say("Systems online. What are we working on today?");
+
+        // ── Safety: Immutable Approval Gate ──────────────────────
+        ApprovalGate approvalGate = new ApprovalGate();
+
+        // ── Sandbox ──────────────────────────────────────────────
+        SandboxEnvironment sandbox = new SandboxEnvironment(Path.of(sandboxDir));
+        try {
+            sandbox.initialize();
+            dialogue.say("Sandbox initialized at " + sandboxDir);
+        } catch (Exception e) {
+            log.error("Failed to initialize sandbox", e);
+            dialogue.say("Sandbox init failed. That's... not great.");
+            return;
+        }
+
+        // ── Git Staging ──────────────────────────────────────────
+        GitStagingService staging = new GitStagingService(sandbox, approvalGate);
+
+        // ── Podman ───────────────────────────────────────────────
+        PodmanController podman = new PodmanController(dialogue);
+        dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size());
+
+        // ── Dual-LLM ────────────────────────────────────────────
+        LlmClient actor = new LlmClient(LlmRole.ACTOR, actorEndpoint);
+        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, reflectorEndpoint);
+        DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(actor, reflector, dialogue);
+
+        // ── Self-Improvement Loop ────────────────────────────────
+        SelfImprovementLoop improvementLoop = new SelfImprovementLoop(
+                orchestrator, approvalGate, staging, dialogue, profile);
+
+        // ── Agents ───────────────────────────────────────────────
+        AgentRegistry registry = new AgentRegistry();
+        registry.register(new ResumeAgent(podman, dialogue));
+        registry.register(new DepopAgent(podman, dialogue));
+        dialogue.say("Agents online: " + registry.getAll().size() + " registered.");
+
+        // ── Interactive Loop ─────────────────────────────────────
+        dialogue.say("Entering interactive mode. Type 'help' for commands, 'quit' to exit.");
+        runInteractiveLoop(dialogue, profile, approvalGate, registry,
+                improvementLoop, podman, staging);
+    }
+
+    /**
+     * Simple interactive command loop.
+     */
+    private void runInteractiveLoop(
+            DialogueStyle dialogue,
+            PersonalityProfile profile,
+            ApprovalGate approvalGate,
+            AgentRegistry registry,
+            SelfImprovementLoop improvementLoop,
+            PodmanController podman,
+            GitStagingService staging
+    ) {
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print("\n[tars]> ");
+            if (!scanner.hasNextLine()) break;
+            String input = scanner.nextLine().trim();
+
+            switch (input.toLowerCase()) {
+                case "quit", "exit" -> {
+                    dialogue.say("Shutting down. It's been real.");
+                    return;
+                }
+                case "help" -> printHelp(dialogue);
+                case "status" -> {
+                    dialogue.say("Profile: " + profile);
+                    dialogue.say("Pending proposals: " + approvalGate.getPendingProposals().size());
+                    dialogue.say("Registered agents: " + registry.getAll().size());
+                }
+                case "agents" -> registry.getAll().forEach(a ->
+                        dialogue.say("  " + a.getName() + " — " + a.getDescription()));
+                case "proposals" -> {
+                    var pending = approvalGate.getPendingProposals();
+                    if (pending.isEmpty()) {
+                        dialogue.say("No pending proposals. I'm behaving.");
+                    } else {
+                        pending.forEach(p -> dialogue.say("  " + p));
+                    }
+                }
+                case "mock-scrape" -> {
+                    dialogue.say("Running example mock scrape task...");
+                    try {
+                        var task = new ExampleMockScrapeTask(podman, dialogue);
+                        var result = task.run();
+                        dialogue.say("Scrape result: " + (result.isSuccess() ? "SUCCESS" : "FAILED"));
+                    } catch (Exception e) {
+                        dialogue.say("Mock scrape failed: " + e.getMessage());
+                    }
+                }
+                case "improve" -> {
+                    dialogue.say("Triggering self-improvement cycle...");
+                    String proposalId = improvementLoop.runCycle("general performance");
+                    if (proposalId != null) {
+                        dialogue.say("Proposal " + proposalId + " awaiting your approval.");
+                    }
+                }
+                default -> {
+                    if (input.startsWith("approve ")) {
+                        String id = input.substring(8).trim();
+                        boolean ok = approvalGate.approve(id);
+                        dialogue.say(ok ? "Proposal " + id + " approved. Proceeding." : "Not found or already decided.");
+                    } else if (input.startsWith("reject ")) {
+                        String id = input.substring(7).trim();
+                        boolean ok = approvalGate.reject(id);
+                        dialogue.say(ok ? "Proposal " + id + " rejected. Discarding." : "Not found or already decided.");
+                    } else if (input.startsWith("run ")) {
+                        String agentName = input.substring(4).trim();
+                        registry.get(agentName).ifPresentOrElse(
+                                agent -> {
+                                    try {
+                                        dialogue.say("Executing " + agent.getName() + "...");
+                                        AgentResult result = agent.execute("default-input");
+                                        dialogue.say("Result: " + result.summary());
+                                    } catch (AgentExecutionException e) {
+                                        dialogue.say("Agent failed: " + e.getMessage());
+                                    }
+                                },
+                                () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.")
+                        );
+                    } else if (!input.isEmpty()) {
+                        dialogue.say("Unknown command: '" + input + "'. Type 'help' for options.");
+                    }
+                }
+            }
+        }
+    }
+
+    private void printHelp(DialogueStyle dialogue) {
+        dialogue.say("Available commands:");
+        dialogue.say("  help              — Show this help");
+        dialogue.say("  status            — System status");
+        dialogue.say("  agents            — List registered agents");
+        dialogue.say("  run <AgentName>   — Execute an agent");
+        dialogue.say("  mock-scrape       — Run the example Podman scrape task");
+        dialogue.say("  improve           — Trigger self-improvement cycle");
+        dialogue.say("  proposals         — List pending change proposals");
+        dialogue.say("  approve <id>      — Approve a proposal");
+        dialogue.say("  reject <id>       — Reject a proposal");
+        dialogue.say("  quit              — Shut down TARS");
+    }
+
+    private void printBanner(DialogueStyle dialogue) {
+        System.out.println();
+        System.out.println("╔═══════════════════════════════════════════════════════╗");
+        System.out.println("║          TARS v2 — Autonomous Agent System            ║");
+        System.out.println("║   \"Spinning up like a caffeinated dolphin\" 🐬☕        ║");
+        System.out.println("╚═══════════════════════════════════════════════════════╝");
+        System.out.println();
+    }
+}

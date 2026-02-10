@@ -1,0 +1,13 @@
+target/
+logs/
+*.class
+*.jar
+*.war
+*.iml
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+/tmp/tars-sandbox/
