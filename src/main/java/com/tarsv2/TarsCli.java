@@ -3,14 +3,21 @@ package com.tarsv2;
 import com.tarsv2.agent.*;
 import com.tarsv2.approval.ApprovalGate;
 import com.tarsv2.improvement.SelfImprovementLoop;
+import com.tarsv2.learning.LearningEngine;
 import com.tarsv2.llm.DualLlmOrchestrator;
 import com.tarsv2.llm.LlmClient;
 import com.tarsv2.llm.LlmRole;
+import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
 import com.tarsv2.sandbox.GitStagingService;
+import com.tarsv2.sandbox.JGitSandboxService;
 import com.tarsv2.sandbox.SandboxEnvironment;
+import com.tarsv2.security.AuthenticationConfig;
+import com.tarsv2.security.SecretManager;
+import com.tarsv2.task.DepopScrapingTask;
 import com.tarsv2.task.ExampleMockScrapeTask;
+import com.tarsv2.web.ProposalWebServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -63,6 +70,14 @@ public final class TarsCli implements Runnable {
             defaultValue = "http://localhost:11435/api/generate")
     private String reflectorEndpoint;
 
+    @Option(names = {"--web-port"}, description = "Web UI port for proposal review",
+            defaultValue = "8080")
+    private int webPort;
+
+    @Option(names = {"--metrics-dir"}, description = "Directory for persistent metrics",
+            defaultValue = "/tmp/tars-metrics")
+    private String metricsDir;
+
     /**
      * Main entry point.
      *
@@ -100,18 +115,39 @@ public final class TarsCli implements Runnable {
         // ── Git Staging ──────────────────────────────────────────
         GitStagingService staging = new GitStagingService(sandbox, approvalGate);
 
+        // ── JGit Sandbox ────────────────────────────────────────
+        JGitSandboxService jgitService = new JGitSandboxService(sandbox, approvalGate, dialogue);
+        try {
+            jgitService.initialize();
+        } catch (Exception e) {
+            log.warn("JGit sandbox init failed (non-fatal): {}", e.getMessage());
+            dialogue.say("JGit sandbox init skipped — file-based staging still active.");
+        }
+
+        // ── Secrets ─────────────────────────────────────────────
+        SecretManager secretManager = new SecretManager();
+        var actorKeyHandle = secretManager.registerFromEnv("actor-api-key", "TARS_ACTOR_API_KEY");
+        var reflectorKeyHandle = secretManager.registerFromEnv("reflector-api-key", "TARS_REFLECTOR_API_KEY");
+        var scraperTokenHandle = secretManager.registerFromEnv("scraper-token", "TARS_SCRAPER_TOKEN");
+
         // ── Podman ───────────────────────────────────────────────
         PodmanController podman = new PodmanController(dialogue);
         dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size());
 
         // ── Dual-LLM ────────────────────────────────────────────
-        LlmClient actor = new LlmClient(LlmRole.ACTOR, actorEndpoint);
-        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, reflectorEndpoint);
+        LlmClient actor = new LlmClient(LlmRole.ACTOR, actorEndpoint, actorKeyHandle);
+        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, reflectorEndpoint, reflectorKeyHandle);
         DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(actor, reflector, dialogue);
+
+        // ── Metrics & Learning ──────────────────────────────────
+        ObservationMetrics metrics = new ObservationMetrics(
+                Path.of(metricsDir, "tars-metrics.json"));
+        LearningEngine learningEngine = new LearningEngine(metrics, dialogue);
+        dialogue.say("Metrics engine online. " + metrics.getTotalCount() + " historical records loaded.");
 
         // ── Self-Improvement Loop ────────────────────────────────
         SelfImprovementLoop improvementLoop = new SelfImprovementLoop(
-                orchestrator, approvalGate, staging, dialogue, profile);
+                orchestrator, approvalGate, staging, dialogue, profile, metrics, learningEngine);
 
         // ── Agents ───────────────────────────────────────────────
         AgentRegistry registry = new AgentRegistry();
@@ -119,10 +155,21 @@ public final class TarsCli implements Runnable {
         registry.register(new DepopAgent(podman, dialogue));
         dialogue.say("Agents online: " + registry.getAll().size() + " registered.");
 
+        // ── Web UI ──────────────────────────────────────────────
+        AuthenticationConfig authConfig = AuthenticationConfig.fromEnvironment();
+        ProposalWebServer webServer = new ProposalWebServer(approvalGate, authConfig, dialogue, webPort);
+        try {
+            webServer.start();
+        } catch (Exception e) {
+            log.warn("Web UI failed to start on port {}: {}", webPort, e.getMessage());
+            dialogue.say("Web UI unavailable — CLI approval still works.");
+        }
+
         // ── Interactive Loop ─────────────────────────────────────
         dialogue.say("Entering interactive mode. Type 'help' for commands, 'quit' to exit.");
         runInteractiveLoop(dialogue, profile, approvalGate, registry,
-                improvementLoop, podman, staging);
+                improvementLoop, podman, staging, metrics, learningEngine,
+                scraperTokenHandle, webServer);
     }
 
     /**
@@ -135,7 +182,11 @@ public final class TarsCli implements Runnable {
             AgentRegistry registry,
             SelfImprovementLoop improvementLoop,
             PodmanController podman,
-            GitStagingService staging
+            GitStagingService staging,
+            ObservationMetrics metrics,
+            LearningEngine learningEngine,
+            SecretManager.SecretHandle scraperTokenHandle,
+            ProposalWebServer webServer
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -146,6 +197,7 @@ public final class TarsCli implements Runnable {
             switch (input.toLowerCase()) {
                 case "quit", "exit" -> {
                     dialogue.say("Shutting down. It's been real.");
+                    if (webServer != null) webServer.stop();
                     return;
                 }
                 case "help" -> printHelp(dialogue);
@@ -153,6 +205,7 @@ public final class TarsCli implements Runnable {
                     dialogue.say("Profile: " + profile);
                     dialogue.say("Pending proposals: " + approvalGate.getPendingProposals().size());
                     dialogue.say("Registered agents: " + registry.getAll().size());
+                    dialogue.say("Metrics recorded: " + metrics.getTotalCount());
                 }
                 case "agents" -> registry.getAll().forEach(a ->
                         dialogue.say("  " + a.getName() + " — " + a.getDescription()));
@@ -162,6 +215,28 @@ public final class TarsCli implements Runnable {
                         dialogue.say("No pending proposals. I'm behaving.");
                     } else {
                         pending.forEach(p -> dialogue.say("  " + p));
+                    }
+                }
+                case "metrics" -> {
+                    dialogue.say(metrics.getSummary());
+                }
+                case "learn" -> {
+                    dialogue.say("Running learning analysis...");
+                    var recommendations = learningEngine.analyze();
+                    if (recommendations.isEmpty()) {
+                        dialogue.say("No improvement recommendations at this time.");
+                    } else {
+                        recommendations.forEach(r -> dialogue.say(
+                                "  [" + r.type() + "] " + r.agentName() + ": " + r.description()));
+                    }
+                }
+                case "depop-scrape" -> {
+                    dialogue.say("Running Depop scraping task...");
+                    var task = new DepopScrapingTask(podman, dialogue, scraperTokenHandle);
+                    var output = task.run("vintage denim", 20);
+                    dialogue.say("Depop scrape result: " + output.status());
+                    if (output.status() == com.tarsv2.schema.AgentTaskOutput.TaskStatus.SUCCESS) {
+                        dialogue.say("Output: " + output.toJson());
                     }
                 }
                 case "mock-scrape" -> {
@@ -219,6 +294,9 @@ public final class TarsCli implements Runnable {
         dialogue.say("  agents            — List registered agents");
         dialogue.say("  run <AgentName>   — Execute an agent");
         dialogue.say("  mock-scrape       — Run the example Podman scrape task");
+        dialogue.say("  depop-scrape      — Run the Depop trend scraping task");
+        dialogue.say("  metrics           — View observation metrics");
+        dialogue.say("  learn             — Run learning engine analysis");
         dialogue.say("  improve           — Trigger self-improvement cycle");
         dialogue.say("  proposals         — List pending change proposals");
         dialogue.say("  approve <id>      — Approve a proposal");
