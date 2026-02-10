@@ -2,7 +2,9 @@ package com.tarsv2.improvement;
 
 import com.tarsv2.approval.ApprovalGate;
 import com.tarsv2.approval.ChangeProposal;
+import com.tarsv2.learning.LearningEngine;
 import com.tarsv2.llm.DualLlmOrchestrator;
+import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.personality.DialogueStyle;
 import com.tarsv2.personality.EmotionState;
 import com.tarsv2.personality.PersonalityProfile;
@@ -41,6 +43,8 @@ public final class SelfImprovementLoop {
     private final GitStagingService stagingService;
     private final DialogueStyle dialogue;
     private final PersonalityProfile profile;
+    private final ObservationMetrics metrics;
+    private final LearningEngine learningEngine;
 
     /**
      * @param orchestrator   dual-LLM orchestrator for generating and evaluating improvements
@@ -56,11 +60,28 @@ public final class SelfImprovementLoop {
             DialogueStyle dialogue,
             PersonalityProfile profile
     ) {
+        this(orchestrator, approvalGate, stagingService, dialogue, profile, null, null);
+    }
+
+    /**
+     * Full constructor with metrics and learning engine integration.
+     */
+    public SelfImprovementLoop(
+            DualLlmOrchestrator orchestrator,
+            ApprovalGate approvalGate,
+            GitStagingService stagingService,
+            DialogueStyle dialogue,
+            PersonalityProfile profile,
+            ObservationMetrics metrics,
+            LearningEngine learningEngine
+    ) {
         this.orchestrator = Objects.requireNonNull(orchestrator);
         this.approvalGate = Objects.requireNonNull(approvalGate);
         this.stagingService = Objects.requireNonNull(stagingService);
         this.dialogue = Objects.requireNonNull(dialogue);
         this.profile = Objects.requireNonNull(profile);
+        this.metrics = metrics;
+        this.learningEngine = learningEngine;
     }
 
     /**
@@ -122,14 +143,21 @@ public final class SelfImprovementLoop {
      * @return observation data as text
      */
     private String observe(String context) {
-        // TODO: Collect real metrics from task history, logs, performance counters
-        return String.format(
-                "Observation context: %s\n" +
-                "Recent task success rate: N/A (no history yet)\n" +
-                "Average execution time: N/A\n" +
-                "Error count: 0\n" +
-                "Note: Metrics collection not yet implemented — using placeholder data.",
-                context
-        );
+        StringBuilder sb = new StringBuilder();
+        sb.append("Observation context: ").append(context).append("\n\n");
+
+        // Pull real metrics if available
+        if (metrics != null && metrics.getTotalCount() > 0) {
+            sb.append(metrics.getSummary()).append("\n");
+        } else {
+            sb.append("No task metrics collected yet.\n");
+        }
+
+        // Pull learning engine report if available
+        if (learningEngine != null) {
+            sb.append(learningEngine.getLearningReport()).append("\n");
+        }
+
+        return sb.toString();
     }
 }

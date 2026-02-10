@@ -1,39 +1,72 @@
 package com.tarsv2.llm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.tarsv2.security.PromptSanitizer;
+import com.tarsv2.security.SecretManager;
+import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Client for communicating with a local or remote LLM endpoint.
  *
  * <p>Each instance is bound to a specific {@link LlmRole} (Actor or Reflector)
- * and talks to the corresponding model endpoint. The dual-client setup
- * ensures TARS never uses the same model to both generate and evaluate
- * its own output.</p>
+ * and talks to the corresponding model endpoint. Supports Ollama (Actor/LLaMA)
+ * and OpenAI-compatible (Reflector/Qwen) HTTP APIs.</p>
  *
- * <p>TODO: Implement actual HTTP calls to Ollama / vLLM / other backends.
- * Current implementation returns placeholder responses for scaffold testing.</p>
+ * <p>All outbound prompts are sanitized via {@link PromptSanitizer}.
+ * API keys are accessed only through opaque {@link SecretManager} handles.</p>
  */
 public final class LlmClient {
 
     private static final Logger log = LoggerFactory.getLogger(LlmClient.class);
+    private static final ObjectMapper mapper = new ObjectMapper();
+    private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
+
+    private static final int MAX_RETRIES = 3;
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(120);
 
     private final LlmRole role;
     private final String endpoint;
+    private final OkHttpClient httpClient;
+    private final SecretManager.SecretHandle apiKeyHandle;
 
     /**
      * @param role     the LLM role this client serves
      * @param endpoint the model API endpoint (e.g., "http://localhost:11434/api/generate")
      */
     public LlmClient(LlmRole role, String endpoint) {
+        this(role, endpoint, null);
+    }
+
+    /**
+     * @param role          the LLM role this client serves
+     * @param endpoint      the model API endpoint
+     * @param apiKeyHandle  opaque handle to the API key (nullable for local models)
+     */
+    public LlmClient(LlmRole role, String endpoint, SecretManager.SecretHandle apiKeyHandle) {
         this.role = Objects.requireNonNull(role);
         this.endpoint = Objects.requireNonNull(endpoint);
+        this.apiKeyHandle = apiKeyHandle;
+        this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                .readTimeout(READ_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build();
     }
 
     /**
      * Sends a prompt to the LLM and returns the response.
+     * All prompts are sanitized before transmission.
+     * Retries up to 3 times on transient failures with exponential backoff.
      *
      * @param systemPrompt the system-level instruction
      * @param userPrompt   the user/task-level prompt
@@ -41,41 +74,118 @@ public final class LlmClient {
      */
     public String complete(String systemPrompt, String userPrompt) {
         log.info("[{}] Sending prompt to {} at {}", role, role.getModelFamily(), endpoint);
-        log.debug("[{}] System: {}", role, systemPrompt);
-        log.debug("[{}] User: {}", role, userPrompt);
 
-        // TODO: Replace with actual OkHttp call to Ollama/vLLM endpoint
-        // Example Ollama payload:
-        // {
-        //   "model": "llama3",
-        //   "system": systemPrompt,
-        //   "prompt": userPrompt,
-        //   "stream": false
-        // }
+        String sanitizedSystem = PromptSanitizer.sanitize(systemPrompt);
+        String sanitizedUser = PromptSanitizer.sanitize(userPrompt);
 
-        String placeholder = String.format(
-                "[%s:%s] Placeholder response for: %.80s...",
-                role, role.getModelFamily(), userPrompt
-        );
-        log.info("[{}] Received response ({} chars)", role, placeholder.length());
-        return placeholder;
+        log.debug("[{}] System: {}", role, sanitizedSystem);
+        log.debug("[{}] User: {}", role, sanitizedUser);
+
+        String requestBody = buildRequestBody(sanitizedSystem, sanitizedUser);
+
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                String response = executeRequest(requestBody);
+                log.info("[{}] Received response ({} chars)", role, response.length());
+                return response;
+            } catch (IOException e) {
+                log.warn("[{}] Attempt {}/{} failed: {}", role, attempt, MAX_RETRIES, e.getMessage());
+                if (attempt == MAX_RETRIES) {
+                    log.error("[{}] All {} attempts exhausted.", role, MAX_RETRIES);
+                    return String.format("[%s] ERROR: LLM endpoint unreachable after %d attempts — %s",
+                            role, MAX_RETRIES, e.getMessage());
+                }
+                try {
+                    long backoffMs = (long) Math.pow(2, attempt) * 1000;
+                    log.info("[{}] Backing off for {}ms before retry", role, backoffMs);
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return String.format("[%s] ERROR: Interrupted during retry backoff", role);
+                }
+            }
+        }
+
+        return String.format("[%s] ERROR: Unexpected retry loop exit", role);
     }
 
-    /**
-     * Returns the role this client serves.
-     *
-     * @return the LLM role
-     */
-    public LlmRole getRole() {
-        return role;
+    private String buildRequestBody(String systemPrompt, String userPrompt) {
+        try {
+            ObjectNode root = mapper.createObjectNode();
+
+            if (role == LlmRole.ACTOR) {
+                // Ollama API format
+                root.put("model", "llama3");
+                root.put("system", systemPrompt);
+                root.put("prompt", userPrompt);
+                root.put("stream", false);
+            } else {
+                // OpenAI-compatible chat format (vLLM / Qwen)
+                root.put("model", "qwen2.5");
+                root.put("stream", false);
+                var messages = root.putArray("messages");
+                messages.addObject().put("role", "system").put("content", systemPrompt);
+                messages.addObject().put("role", "user").put("content", userPrompt);
+            }
+
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build LLM request body", e);
+        }
     }
 
-    /**
-     * Returns the endpoint URL.
-     *
-     * @return the API endpoint
-     */
-    public String getEndpoint() {
-        return endpoint;
+    private String executeRequest(String requestBody) throws IOException {
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(endpoint)
+                .post(RequestBody.create(requestBody, JSON_MEDIA));
+
+        if (apiKeyHandle != null) {
+            reqBuilder.addHeader("Authorization", "Bearer " + apiKeyHandle.resolve());
+        }
+
+        try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("LLM API returned HTTP " + response.code()
+                        + ": " + (response.body() != null ? response.body().string() : "no body"));
+            }
+
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("LLM API returned null body");
+            }
+
+            return parseResponse(body.string());
+        }
     }
+
+    private String parseResponse(String rawJson) {
+        try {
+            JsonNode root = mapper.readTree(rawJson);
+
+            // Ollama format: { "response": "..." }
+            if (root.has("response")) {
+                return root.get("response").asText();
+            }
+
+            // OpenAI-compatible: { "choices": [{ "message": { "content": "..." } }] }
+            if (root.has("choices")) {
+                JsonNode choices = root.get("choices");
+                if (choices.isArray() && !choices.isEmpty()) {
+                    JsonNode message = choices.get(0).get("message");
+                    if (message != null && message.has("content")) {
+                        return message.get("content").asText();
+                    }
+                }
+            }
+
+            log.warn("[{}] Could not parse standard response format, returning raw", role);
+            return rawJson;
+        } catch (Exception e) {
+            log.warn("[{}] JSON parsing failed, returning raw response", role);
+            return rawJson;
+        }
+    }
+
+    public LlmRole getRole() { return role; }
+    public String getEndpoint() { return endpoint; }
 }

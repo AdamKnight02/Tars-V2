@@ -119,9 +119,38 @@ public final class DualLlmOrchestrator {
     }
 
     private double parseQualityScore(String reflectionRaw) {
-        // TODO: Parse actual score from structured Reflector response
-        // For scaffold, return a passing score to demonstrate the loop
-        return 0.8;
+        if (reflectionRaw == null || reflectionRaw.isBlank()) {
+            return 0.0;
+        }
+
+        // Try to extract a decimal score from patterns like "score: 0.85", "quality: 0.7", "0.9/1.0"
+        java.util.regex.Pattern[] scorePatterns = {
+                java.util.regex.Pattern.compile("(?i)(?:score|quality|rating)\\s*[:=]\\s*(\\d+\\.\\d+)"),
+                java.util.regex.Pattern.compile("(\\d+\\.\\d+)\\s*/\\s*1\\.0"),
+                java.util.regex.Pattern.compile("(0\\.\\d+)")
+        };
+
+        for (var pattern : scorePatterns) {
+            var matcher = pattern.matcher(reflectionRaw);
+            if (matcher.find()) {
+                try {
+                    double score = Double.parseDouble(matcher.group(1));
+                    if (score >= 0.0 && score <= 1.0) {
+                        return score;
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+
+        // Heuristic fallback based on sentiment keywords
+        String lower = reflectionRaw.toLowerCase();
+        if (lower.contains("excellent") || lower.contains("perfect")) return 0.95;
+        if (lower.contains("good") || lower.contains("solid")) return 0.8;
+        if (lower.contains("acceptable") || lower.contains("adequate")) return 0.7;
+        if (lower.contains("poor") || lower.contains("insufficient")) return 0.4;
+        if (lower.contains("terrible") || lower.contains("reject")) return 0.2;
+
+        return 0.6;
     }
 
     /**
