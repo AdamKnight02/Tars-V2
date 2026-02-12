@@ -70,8 +70,8 @@ public final class TarsCli implements Runnable {
             defaultValue = "/tmp/tars-sandbox")
     private String sandboxDir;
 
-    @Option(names = {"--ollama-url"}, description = "Ollama endpoint URL")
-    private String ollamaUrl = envOrDefault("TARS_OLLAMA_URL", "http://localhost:11434/api/generate");
+    @Option(names = {"--ollama-url"}, description = "Ollama base URL")
+    private String ollamaUrl = envOrDefault("TARS_OLLAMA_URL", "http://localhost:11434");
 
     @Option(names = {"--actor-model"}, description = "Actor model name")
     private String actorModel = envOrDefault("TARS_ACTOR_MODEL", "llama3:8b");
@@ -110,11 +110,9 @@ public final class TarsCli implements Runnable {
         return (value == null || value.isBlank()) ? fallback : value;
     }
 
-    private static String resolveOllamaEndpoint(String configuredUrl) {
-        String trimmed = configuredUrl.endsWith("/")
-                ? configuredUrl.substring(0, configuredUrl.length() - 1)
-                : configuredUrl;
-        return trimmed.endsWith("/api/generate") ? trimmed : trimmed + "/api/generate";
+    private static String buildOllamaGenerateEndpoint(String baseUrl) {
+        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        return trimmed + "/api/generate";
     }
 
     @Override
@@ -165,7 +163,7 @@ public final class TarsCli implements Runnable {
         dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size());
 
         // ── Dual-LLM ────────────────────────────────────────────
-        String ollamaEndpoint = resolveOllamaEndpoint(ollamaUrl);
+        String ollamaEndpoint = buildOllamaGenerateEndpoint(ollamaUrl);
         LlmClient actor = new LlmClient(LlmRole.ACTOR, ollamaEndpoint, actorModel, actorKeyHandle);
         LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, ollamaEndpoint, reflectorModel, reflectorKeyHandle);
         LlmService llmService = new DefaultLlmService(actor, reflector);
