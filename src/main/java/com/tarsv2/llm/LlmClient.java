@@ -28,6 +28,14 @@ public final class LlmClient {
     private static final Logger log = LoggerFactory.getLogger(LlmClient.class);
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final MediaType JSON_MEDIA = MediaType.get("application/json; charset=utf-8");
+    private static final String HARD_SYSTEM_INSTRUCTIONS = """
+            SYSTEM:
+            You are TARS v2, a deterministic autonomous software engineering agent.
+            You are NOT a fictional character.
+            You do NOT roleplay or reference movies, stories, movies, or actors.
+            You produce ONLY concise technical answers or structured JSON outputs where required.
+            If you produce anything other than valid JSON when required, that is a failure.
+            """;
 
     private static final int MAX_RETRIES = 3;
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
@@ -78,7 +86,8 @@ public final class LlmClient {
     public String complete(String systemPrompt, String userPrompt) {
         log.info("[{}] Sending prompt to {} at {}", role, role.getModelFamily(), endpoint);
 
-        String sanitizedSystem = PromptSanitizer.sanitize(systemPrompt);
+        String fullSystemPrompt = HARD_SYSTEM_INSTRUCTIONS + "\n\n" + systemPrompt;
+        String sanitizedSystem = PromptSanitizer.sanitize(fullSystemPrompt);
         String sanitizedUser = PromptSanitizer.sanitize(userPrompt);
 
         log.debug("[{}] System: {}", role, sanitizedSystem);

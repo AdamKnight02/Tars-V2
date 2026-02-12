@@ -225,6 +225,7 @@ public final class TarsCli implements Runnable {
         ChatConfig chatConfig = new ChatConfig(threshold);
         ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
                 llmService, chatConfig, contextSummarizer, contextBudget);
+        ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(llmService);
 
         // ── Sudo Manager ────────────────────────────────────────
         String sudoPass = System.getenv("TARS_SUDO_PASS");
@@ -258,7 +259,7 @@ public final class TarsCli implements Runnable {
                 improvementLoop, supervisedDevLoop, podman, staging, metrics, learningEngine,
                 scraperTokenHandle, webServer, vscodeConnector,
                 auditLog, memorySystem, chunkLearning, sudoManager,
-                envRegistry, openClaw, contextBudget, chatOrchestrator);
+                envRegistry, openClaw, contextBudget, chatOrchestrator, researchOrchestrator);
     }
 
     /**
@@ -285,7 +286,8 @@ public final class TarsCli implements Runnable {
             EnvironmentRegistry envRegistry,
             OpenClawClient openClaw,
             ContextBudget contextBudget,
-            ChatOrchestrator chatOrchestrator
+            ChatOrchestrator chatOrchestrator,
+            ResearchOrchestrator researchOrchestrator
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -466,6 +468,13 @@ public final class TarsCli implements Runnable {
                                 },
                                 () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.", DialogueStyle.OutputMode.CHAT)
                         );
+                    } else if (input.startsWith("research ")) {
+                        String topic = input.substring("research ".length()).trim();
+                        if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
+                            topic = topic.substring(1, topic.length() - 1);
+                        }
+                        String researchJson = researchOrchestrator.research(topic);
+                        System.out.println(researchJson);
                     } else if (!input.isEmpty()) {
                         String reply = chatOrchestrator.chat(input);
                         System.out.println("[TARS] " + reply);
@@ -490,6 +499,7 @@ public final class TarsCli implements Runnable {
         dialogue.say("  dev-analyze       — Run observe/analyze phases", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  dev-generate-tests — Generate a failing test proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  dev-propose-fix   — Build a fix proposal from generated test", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  research <topic>  — Return deterministic JSON research proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  reject <id>       — Reject a proposal", DialogueStyle.OutputMode.CHAT);

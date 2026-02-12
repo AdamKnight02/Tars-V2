@@ -220,7 +220,16 @@ java -jar target/tars-v2-0.1.0-SNAPSHOT.jar \
 | `proposals` | List pending change proposals |
 | `approve <id>` | Approve a pending proposal |
 | `reject <id>` | Reject a pending proposal |
+| `research <topic>` | Return a deterministic JSON-only research proposal |
 | `quit` | Shut down TARS |
+
+
+### Research command output
+
+```bash
+[tars]> research "Improve CLI help formatting"
+{"summary":"Standardize help command spacing and descriptions for readability.","affected_files":["src/main/java/com/tarsv2/TarsCli.java","README.md"],"diff":"+ add research command help text\n~ align command descriptions in printHelp()","risk_level":"LOW","rollback_instructions":"Revert TarsCli help text formatting and README command table changes."}
+```
 
 ## TODOs
 
