@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -43,15 +44,12 @@ public final class ProposalWebServer {
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     private final ApprovalGate approvalGate;
-    private final AuthenticationConfig authConfig;
     private final DialogueStyle dialogue;
     private final int port;
     private HttpServer server;
 
-    public ProposalWebServer(ApprovalGate approvalGate, AuthenticationConfig authConfig,
-                             DialogueStyle dialogue, int port) {
+    public ProposalWebServer(ApprovalGate approvalGate, DialogueStyle dialogue, int port) {
         this.approvalGate = Objects.requireNonNull(approvalGate);
-        this.authConfig = Objects.requireNonNull(authConfig);
         this.dialogue = Objects.requireNonNull(dialogue);
         this.port = port;
     }
@@ -207,8 +205,17 @@ public final class ProposalWebServer {
 
     private boolean authenticate(HttpExchange exchange) throws IOException {
         String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
-        if (authConfig.authenticateBasic(authHeader)) {
-            return true;
+        if (authHeader != null && authHeader.startsWith("Basic ")) {
+            try {
+                String decoded = new String(Base64.getDecoder().decode(authHeader.substring(6)),
+                        StandardCharsets.UTF_8);
+                String[] parts = decoded.split(":", 2);
+                if (parts.length == 2 && AuthenticationConfig.authenticate(parts[0], parts[1])) {
+                    return true;
+                }
+            } catch (IllegalArgumentException ignored) {
+                // fall through to 401
+            }
         }
 
         exchange.getResponseHeaders().add("WWW-Authenticate", "Basic realm=\"TARS Proposal Review\"");
