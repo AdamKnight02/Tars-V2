@@ -2,12 +2,19 @@ package com.tarsv2;
 
 import com.tarsv2.agent.*;
 import com.tarsv2.approval.ApprovalGate;
+import com.tarsv2.chunk.ChunkLearningEngine;
+import com.tarsv2.connector.*;
+import com.tarsv2.context.ContextBudget;
+import com.tarsv2.context.ContextSummarizer;
+import com.tarsv2.environment.*;
 import com.tarsv2.improvement.SelfImprovementLoop;
 import com.tarsv2.learning.LearningEngine;
 import com.tarsv2.llm.DualLlmOrchestrator;
 import com.tarsv2.llm.LlmClient;
 import com.tarsv2.llm.LlmRole;
+import com.tarsv2.memory.MemorySystem;
 import com.tarsv2.metrics.ObservationMetrics;
+import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
 import com.tarsv2.sandbox.GitStagingService;
@@ -15,6 +22,7 @@ import com.tarsv2.sandbox.JGitSandboxService;
 import com.tarsv2.sandbox.SandboxEnvironment;
 import com.tarsv2.security.AuthenticationConfig;
 import com.tarsv2.security.SecretManager;
+import com.tarsv2.sudo.SudoManager;
 import com.tarsv2.task.DepopScrapingTask;
 import com.tarsv2.task.ExampleMockScrapeTask;
 import com.tarsv2.web.ProposalWebServer;
@@ -26,13 +34,15 @@ import picocli.CommandLine.Option;
 
 import java.nio.file.Path;
 import java.util.Scanner;
+import java.util.Set;
 
 /**
  * TARS v2 — Main CLI entry point.
  *
  * <p>Boots the full agent system: personality engine, approval gate,
- * sandbox, Podman controller, dual-LLM orchestrator, agents, and
- * self-improvement loop.</p>
+ * sandbox, Podman controller, dual-LLM orchestrator, agents,
+ * self-improvement loop, OpenClaw execution model, environment system,
+ * dev connectors, memory system, chunk learning, and sudo management.</p>
  *
  * <p>Example startup output:</p>
  * <pre>
@@ -73,6 +83,10 @@ public final class TarsCli implements Runnable {
     @Option(names = {"--web-port"}, description = "Web UI port for proposal review",
             defaultValue = "8080")
     private int webPort;
+
+    @Option(names = {"--vscode-port"}, description = "VS Code connector port",
+            defaultValue = "8089")
+    private int vscodePort;
 
     @Option(names = {"--metrics-dir"}, description = "Directory for persistent metrics",
             defaultValue = "/tmp/tars-metrics")
@@ -129,6 +143,7 @@ public final class TarsCli implements Runnable {
         var actorKeyHandle = secretManager.registerFromEnv("actor-api-key", "TARS_ACTOR_API_KEY");
         var reflectorKeyHandle = secretManager.registerFromEnv("reflector-api-key", "TARS_REFLECTOR_API_KEY");
         var scraperTokenHandle = secretManager.registerFromEnv("scraper-token", "TARS_SCRAPER_TOKEN");
+        var githubTokenHandle = secretManager.registerFromEnv("github-token", "TARS_GITHUB_TOKEN");
 
         // ── Podman ───────────────────────────────────────────────
         PodmanController podman = new PodmanController(dialogue);
@@ -155,6 +170,52 @@ public final class TarsCli implements Runnable {
         registry.register(new DepopAgent(podman, dialogue));
         dialogue.say("Agents online: " + registry.getAll().size() + " registered.");
 
+        // ── Permission Model ────────────────────────────────────
+        DevPermissionModel permissions = DevPermissionModel.fromEnvironment();
+        dialogue.say("Dev capabilities: " + permissions.getGranted());
+
+        // ── Audit Log ───────────────────────────────────────────
+        DevAuditLog auditLog = new DevAuditLog(dialogue);
+
+        // ── Environment Registry (ALE-style) ────────────────────
+        EnvironmentRegistry envRegistry = new EnvironmentRegistry();
+        SandboxDispatcher sandboxDispatcher = new SandboxDispatcher(sandbox, approvalGate);
+        EnvironmentFactory.registerAll(envRegistry, sandboxDispatcher);
+        dialogue.say("Environments: " + envRegistry.size() + " registered (ALE-pinned).");
+
+        // ── OpenClaw Execution Layer ────────────────────────────
+        OpenClawClient openClaw = new OpenClawClient(envRegistry, permissions, dialogue);
+        dialogue.say("OpenClaw execution layer online. TARS produces intents, OpenClaw executes.");
+
+        // ── Memory System ───────────────────────────────────────
+        MemorySystem memorySystem = new MemorySystem(dialogue);
+        dialogue.say("Memory system online. Active memories: " + memorySystem.getActiveCount());
+
+        // ── Chunk Learning Engine ───────────────────────────────
+        ChunkLearningEngine chunkLearning = new ChunkLearningEngine(
+                dialogue, Path.of(metricsDir, "trajectories.jsonl"));
+        dialogue.say("Chunk learning engine online. Strategy weights initialized.");
+
+        // ── Context Discipline ──────────────────────────────────
+        ContextBudget contextBudget = new ContextBudget(8000);
+        ContextSummarizer contextSummarizer = new ContextSummarizer();
+
+        // ── Sudo Manager ────────────────────────────────────────
+        String sudoPass = System.getenv("TARS_SUDO_PASS");
+        SudoManager sudoManager = new SudoManager(dialogue,
+                sudoPass != null ? sudoPass : "tars-sudo-default");
+        dialogue.say("Sudo manager armed. Kill switch ready.");
+
+        // ── VS Code Connector ───────────────────────────────────
+        VSCodeConnector vscodeConnector = new VSCodeConnector(
+                sandbox.getRoot(), approvalGate, dialogue, permissions, auditLog, vscodePort);
+        try {
+            vscodeConnector.start();
+        } catch (Exception e) {
+            log.warn("VS Code connector failed to start on port {}: {}", vscodePort, e.getMessage());
+            dialogue.say("VS Code connector unavailable — API-only mode.");
+        }
+
         // ── Web UI ──────────────────────────────────────────────
         AuthenticationConfig authConfig = AuthenticationConfig.fromEnvironment();
         ProposalWebServer webServer = new ProposalWebServer(approvalGate, authConfig, dialogue, webPort);
@@ -169,11 +230,13 @@ public final class TarsCli implements Runnable {
         dialogue.say("Entering interactive mode. Type 'help' for commands, 'quit' to exit.");
         runInteractiveLoop(dialogue, profile, approvalGate, registry,
                 improvementLoop, podman, staging, metrics, learningEngine,
-                scraperTokenHandle, webServer);
+                scraperTokenHandle, webServer, vscodeConnector,
+                auditLog, memorySystem, chunkLearning, sudoManager,
+                envRegistry, openClaw, contextBudget);
     }
 
     /**
-     * Simple interactive command loop.
+     * Interactive command loop with all subsystem integration.
      */
     private void runInteractiveLoop(
             DialogueStyle dialogue,
@@ -186,7 +249,15 @@ public final class TarsCli implements Runnable {
             ObservationMetrics metrics,
             LearningEngine learningEngine,
             SecretManager.SecretHandle scraperTokenHandle,
-            ProposalWebServer webServer
+            ProposalWebServer webServer,
+            VSCodeConnector vscodeConnector,
+            DevAuditLog auditLog,
+            MemorySystem memorySystem,
+            ChunkLearningEngine chunkLearning,
+            SudoManager sudoManager,
+            EnvironmentRegistry envRegistry,
+            OpenClawClient openClaw,
+            ContextBudget contextBudget
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -194,10 +265,29 @@ public final class TarsCli implements Runnable {
             if (!scanner.hasNextLine()) break;
             String input = scanner.nextLine().trim();
 
+            // ── Sudo detection ──────────────────────────────────
+            if (sudoManager.isSudoRequest(input)) {
+                dialogue.say("[SUDO] Elevated command detected. Enter sudo password:");
+                System.out.print("[sudo]> ");
+                if (!scanner.hasNextLine()) break;
+                String password = scanner.nextLine().trim();
+                var token = sudoManager.authenticate(password,
+                        Set.of("large-refactor", "multi-repo", "increased-retries"));
+                if (token.isPresent()) {
+                    String cmd = sudoManager.extractCommand(input);
+                    dialogue.say("[SUDO] Executing elevated: " + cmd);
+                    // Route to normal command handling with sudo context
+                    input = cmd;
+                } else {
+                    continue;
+                }
+            }
+
             switch (input.toLowerCase()) {
                 case "quit", "exit" -> {
                     dialogue.say("Shutting down. It's been real.");
                     if (webServer != null) webServer.stop();
+                    if (vscodeConnector != null) vscodeConnector.stop();
                     return;
                 }
                 case "help" -> printHelp(dialogue);
@@ -206,6 +296,10 @@ public final class TarsCli implements Runnable {
                     dialogue.say("Pending proposals: " + approvalGate.getPendingProposals().size());
                     dialogue.say("Registered agents: " + registry.getAll().size());
                     dialogue.say("Metrics recorded: " + metrics.getTotalCount());
+                    dialogue.say("Environments: " + envRegistry.size());
+                    dialogue.say("Active memories: " + memorySystem.getActiveCount());
+                    dialogue.say("Sudo sessions: " + sudoManager.getActiveCount());
+                    dialogue.say("Context budget: " + contextBudget);
                 }
                 case "agents" -> registry.getAll().forEach(a ->
                         dialogue.say("  " + a.getName() + " — " + a.getDescription()));
@@ -219,6 +313,28 @@ public final class TarsCli implements Runnable {
                 }
                 case "metrics" -> {
                     dialogue.say(metrics.getSummary());
+                }
+                case "environments" -> {
+                    envRegistry.getAll().forEach(env ->
+                            dialogue.say("  " + env));
+                }
+                case "memory" -> {
+                    dialogue.say(memorySystem.getSummary());
+                }
+                case "memory-decay" -> {
+                    dialogue.say("Running memory decay cycle...");
+                    var report = memorySystem.runDecayCycle();
+                    dialogue.say("Decay complete: " + report.toSummary());
+                }
+                case "chunks" -> {
+                    dialogue.say(chunkLearning.getSummary());
+                }
+                case "audit" -> {
+                    dialogue.say(auditLog.getSummary());
+                }
+                case "kill-switch" -> {
+                    dialogue.say("[SECURITY] Activating kill switch...");
+                    sudoManager.killSwitch();
                 }
                 case "learn" -> {
                     dialogue.say("Running learning analysis...");
@@ -265,6 +381,7 @@ public final class TarsCli implements Runnable {
                         String id = input.substring(7).trim();
                         boolean ok = approvalGate.reject(id);
                         dialogue.say(ok ? "Proposal " + id + " rejected. Discarding." : "Not found or already decided.");
+                        if (ok) memorySystem.onRejection(id);
                     } else if (input.startsWith("run ")) {
                         String agentName = input.substring(4).trim();
                         registry.get(agentName).ifPresentOrElse(
@@ -290,7 +407,7 @@ public final class TarsCli implements Runnable {
     private void printHelp(DialogueStyle dialogue) {
         dialogue.say("Available commands:");
         dialogue.say("  help              — Show this help");
-        dialogue.say("  status            — System status");
+        dialogue.say("  status            — System status (all subsystems)");
         dialogue.say("  agents            — List registered agents");
         dialogue.say("  run <AgentName>   — Execute an agent");
         dialogue.say("  mock-scrape       — Run the example Podman scrape task");
@@ -301,6 +418,13 @@ public final class TarsCli implements Runnable {
         dialogue.say("  proposals         — List pending change proposals");
         dialogue.say("  approve <id>      — Approve a proposal");
         dialogue.say("  reject <id>       — Reject a proposal");
+        dialogue.say("  environments      — List execution environments");
+        dialogue.say("  memory            — Memory system summary");
+        dialogue.say("  memory-decay      — Run memory decay cycle");
+        dialogue.say("  chunks            — Chunk learning summary");
+        dialogue.say("  audit             — Dev connector audit log");
+        dialogue.say("  kill-switch       — Revoke all sudo sessions");
+        dialogue.say("  sudo:<command>    — Execute with elevated privileges");
         dialogue.say("  quit              — Shut down TARS");
     }
 
