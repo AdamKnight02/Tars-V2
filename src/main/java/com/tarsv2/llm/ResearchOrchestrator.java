@@ -57,7 +57,9 @@ public final class ResearchOrchestrator {
             return INSUFFICIENT_CONTEXT_ERROR;
         }
 
-        String actorPrompt = repositoryContextInjector.injectIfRelevant(buildResearchPrompt(topic), topic);
+        RepositoryContextInjector.InjectionResult actorInjection = repositoryContextInjector.injectIfRelevant(buildResearchPrompt(topic), topic);
+        logResearchInjection(actorInjection);
+        String actorPrompt = actorInjection.prompt();
         JsonNode candidate = generateValidResearchJson(actorPrompt, topic);
         if (candidate == null) {
             return INVALID_JSON_ERROR;
@@ -69,7 +71,12 @@ public final class ResearchOrchestrator {
                 return toCanonicalJson(candidate);
             }
 
-            String revisionPrompt = repositoryContextInjector.injectIfRelevant(buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique()), topic);
+            RepositoryContextInjector.InjectionResult revisionInjection = repositoryContextInjector.injectIfRelevant(
+                    buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique()),
+                    topic
+            );
+            logResearchInjection(revisionInjection);
+            String revisionPrompt = revisionInjection.prompt();
             candidate = generateValidResearchJson(revisionPrompt, topic);
             if (candidate == null) {
                 return INVALID_JSON_ERROR;
@@ -93,10 +100,15 @@ public final class ResearchOrchestrator {
                 return parsed;
             }
 
-            prompt = repositoryContextInjector.injectIfRelevant("Your previous response was invalid. Return ONLY valid JSON following the required schema with no extra text.\n"
-                    + "Topic: " + topic + "\n"
-                    + "Required schema:\n"
-                    + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}", topic);
+            RepositoryContextInjector.InjectionResult injection = repositoryContextInjector.injectIfRelevant(
+                    "Your previous response was invalid. Return ONLY valid JSON following the required schema with no extra text.\n"
+                            + "Topic: " + topic + "\n"
+                            + "Required schema:\n"
+                            + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}",
+                    topic
+            );
+            logResearchInjection(injection);
+            prompt = injection.prompt();
         }
         return null;
     }
@@ -105,10 +117,7 @@ public final class ResearchOrchestrator {
         String reflectionRaw = llmService.generate(
                 LlmRole.REFLECTOR,
                 REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are a strict quality validator. Score JSON output quality only. Return JSON only.",
-                repositoryContextInjector.injectIfRelevant("Evaluate this research JSON for schema compliance, technical specificity, and rollback clarity.\n"
-                        + "Return ONLY JSON with schema {\"qualityScore\": <number 0.0 to 1.0>, \"critique\": \"<brief technical critique>\"}.\n"
-                        + "Topic: " + topic + "\n"
-                        + "Candidate JSON:\n" + toCanonicalJson(candidate), topic)
+                buildScoringPrompt(candidate, topic)
         );
 
         if (containsHallucinationTrigger(reflectionRaw)) {
@@ -176,6 +185,28 @@ public final class ResearchOrchestrator {
             return object;
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private String buildScoringPrompt(JsonNode candidate, String topic) {
+        RepositoryContextInjector.InjectionResult injection = repositoryContextInjector.injectIfRelevant(
+                "Evaluate this research JSON for schema compliance, technical specificity, and rollback clarity.\n"
+                        + "Return ONLY JSON with schema {\"qualityScore\": <number 0.0 to 1.0>, \"critique\": \"<brief technical critique>\"}.\n"
+                        + "Topic: " + topic + "\n"
+                        + "Candidate JSON:\n" + toCanonicalJson(candidate),
+                topic
+        );
+        logResearchInjection(injection);
+        return injection.prompt();
+    }
+
+    private void logResearchInjection(RepositoryContextInjector.InjectionResult injection) {
+        try {
+            Object filesInjected = injection.getClass().getMethod("filesInjected").invoke(injection);
+            Object charsInjected = injection.getClass().getMethod("charsInjected").invoke(injection);
+            log.info("Research injection: files={}, chars={}", filesInjected, charsInjected);
+        } catch (ReflectiveOperationException ignored) {
+            // Optional metrics are not available in this InjectionResult version.
         }
     }
 
