@@ -30,6 +30,9 @@ import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.nio.file.Path;
 import java.util.Scanner;
 import java.util.Set;
@@ -61,6 +64,9 @@ import java.util.Set;
 public final class TarsCli implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TarsCli.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private record ProposedChange(String summary, String diff, String rationale) {}
 
     @Option(names = {"-H", "--humor"}, description = "Humor level: MINIMAL, LOW, MEDIUM, HIGH, MAXIMUM",
             defaultValue = "MEDIUM")
@@ -466,6 +472,27 @@ public final class TarsCli implements Runnable {
                                 },
                                 () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.", DialogueStyle.OutputMode.CHAT)
                         );
+                    } else if (input.startsWith("propose ")) {
+                        String topic = input.substring("propose ".length()).trim();
+                        if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
+                            topic = topic.substring(1, topic.length() - 1);
+                        }
+                        String researchJson = researchOrchestrator.research(topic);
+                        var proposedChange = parseProposalStructure(researchJson);
+                        if (proposedChange.isEmpty()) {
+                            dialogue.say("Proposal generation failed: invalid structure", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+
+                        String proposalId = java.util.UUID.randomUUID().toString();
+                        var proposal = new com.tarsv2.approval.ChangeProposal(
+                                proposalId,
+                                proposedChange.get().summary(),
+                                proposedChange.get().diff(),
+                                proposedChange.get().rationale()
+                        );
+                        approvalGate.submit(proposal);
+                        dialogue.say("Proposal created with ID: " + proposalId + ". Awaiting approval.", DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("research ")) {
                         String topic = input.substring("research ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
@@ -497,6 +524,7 @@ public final class TarsCli implements Runnable {
         dialogue.say("  dev-analyze       — Run observe/analyze phases", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  dev-generate-tests — Generate a failing test proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  dev-propose-fix   — Build a fix proposal from generated test", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  propose <topic>   — Create a pending proposal from structured Actor output", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  research <topic>  — Return deterministic JSON research proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
@@ -509,6 +537,26 @@ public final class TarsCli implements Runnable {
         dialogue.say("  kill-switch       — Revoke all sudo sessions", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  sudo:<command>    — Execute with elevated privileges", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  quit              — Shut down TARS", DialogueStyle.OutputMode.CHAT);
+    }
+
+
+    private java.util.Optional<ProposedChange> parseProposalStructure(String researchJson) {
+        try {
+            JsonNode root = MAPPER.readTree(researchJson);
+            if (!root.isObject()) return java.util.Optional.empty();
+
+            JsonNode summary = root.get("summary");
+            JsonNode diff = root.get("diff");
+            JsonNode rollback = root.get("rollback_instructions");
+
+            if (summary == null || !summary.isTextual() || summary.asText().isBlank()) return java.util.Optional.empty();
+            if (diff == null || !diff.isTextual() || diff.asText().isBlank()) return java.util.Optional.empty();
+            if (rollback == null || !rollback.isTextual() || rollback.asText().isBlank()) return java.util.Optional.empty();
+
+            return java.util.Optional.of(new ProposedChange(summary.asText(), diff.asText(), rollback.asText()));
+        } catch (Exception e) {
+            return java.util.Optional.empty();
+        }
     }
 
     private void printBanner(DialogueStyle dialogue) {
