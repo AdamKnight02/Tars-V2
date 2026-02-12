@@ -61,7 +61,9 @@ public final class ChatOrchestrator {
         }
 
         String actorPrompt = fitPromptToBudget(buildActorPrompt(normalizedInput));
-        actorPrompt = repositoryContextInjector.injectIfRelevant(actorPrompt, normalizedInput);
+        RepositoryContextInjector.InjectionResult actorInjection = repositoryContextInjector.injectIfRelevant(actorPrompt, normalizedInput);
+        logInjection("actor", actorInjection);
+        actorPrompt = actorInjection.prompt();
         String actorAnswer = llmService.generate(
                 LlmRole.ACTOR,
                 REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Actor. Respond helpfully, accurately, and concisely.",
@@ -69,7 +71,9 @@ public final class ChatOrchestrator {
         );
 
         String reflectorPrompt = fitPromptToBudget(buildReflectorPrompt(normalizedInput, actorAnswer));
-        reflectorPrompt = repositoryContextInjector.injectIfRelevant(reflectorPrompt, normalizedInput);
+        RepositoryContextInjector.InjectionResult reflectorInjection = repositoryContextInjector.injectIfRelevant(reflectorPrompt, normalizedInput);
+        logInjection("reflector", reflectorInjection);
+        reflectorPrompt = reflectorInjection.prompt();
         String reflectionRaw = llmService.generate(
                 LlmRole.REFLECTOR,
                 REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Reflector. Return strict JSON only.",
@@ -85,7 +89,9 @@ public final class ChatOrchestrator {
                 reflection.qualityScore(), chatConfig.qualityThreshold());
 
         String revisionPrompt = fitPromptToBudget(buildRevisionPrompt(normalizedInput, actorAnswer, reflection));
-        revisionPrompt = repositoryContextInjector.injectIfRelevant(revisionPrompt, normalizedInput);
+        RepositoryContextInjector.InjectionResult revisionInjection = repositoryContextInjector.injectIfRelevant(revisionPrompt, normalizedInput);
+        logInjection("revision", revisionInjection);
+        revisionPrompt = revisionInjection.prompt();
         return llmService.generate(
                 LlmRole.ACTOR,
                 REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Actor. Revise your prior answer using critique feedback.",
@@ -120,6 +126,16 @@ public final class ChatOrchestrator {
                 + "Previous actor answer:\n" + actorAnswer + "\n\n"
                 + "Reflector critique:\n" + reflection.critique() + "\n\n"
                 + "Provide an improved final response.";
+    }
+
+    private void logInjection(String stage, RepositoryContextInjector.InjectionResult injection) {
+        if (!injection.keywordTriggered()) {
+            return;
+        }
+
+        log.debug("Repository context keyword detection triggered for stage {} with keyword '{}'", stage, injection.triggeredKeyword());
+        log.debug("Repository context selected files for stage {}: {}", stage, injection.selectedFiles());
+        log.debug("Repository context injected {} characters for stage {}", injection.injectedCharacters(), stage);
     }
 
     private ReflectionResult parseReflection(String reflectionRaw) {
