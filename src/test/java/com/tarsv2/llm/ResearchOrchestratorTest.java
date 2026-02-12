@@ -66,4 +66,21 @@ class ResearchOrchestratorTest {
 
         assertEquals("{\"error\":\"INSUFFICIENT_CONTEXT\"}", result);
     }
+
+    @Test
+    void revisionOccursWhenReflectorContainsDisallowedTerms() {
+        Queue<String> responses = new ArrayDeque<>();
+        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
+        responses.add("{\"qualityScore\":0.99,\"critique\":\"Interstellar reference appeared\"}");
+        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks with repository classes\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
+        responses.add("{\"qualityScore\":0.91,\"critique\":\"Grounded and specific\"}");
+
+        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+
+        String result = orchestrator.research("Improve sandbox dispatcher behavior");
+
+        assertTrue(result.contains("repository classes"));
+        assertTrue(responses.isEmpty());
+    }
 }

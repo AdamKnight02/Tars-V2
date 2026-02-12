@@ -20,7 +20,23 @@ public final class ChatOrchestrator {
     private final LlmService llmService;
     private final ChatConfig chatConfig;
     private final ContextSummarizer contextSummarizer;
+    private static final String REPOSITORY_GROUNDING_INSTRUCTION = """
+            You are TARS v2 running inside your own Java codebase.
+            You are NOT a fictional character.
+            You do NOT reference movies.
+            You do NOT explain Android or generic frameworks unless they exist in this repository.
+
+            If asked about systems (Intent, Sandbox, Agent, etc.),
+            you MUST reference actual classes and packages inside:
+            com.tarsv2.*
+
+            If the answer cannot be derived from repository structure,
+            respond:
+            "Insufficient repository context."
+            """.strip();
+
     private final ContextBudget contextBudget;
+    private final RepositoryContextInjector repositoryContextInjector;
 
     public ChatOrchestrator(
             LlmService llmService,
@@ -32,6 +48,7 @@ public final class ChatOrchestrator {
         this.chatConfig = Objects.requireNonNull(chatConfig);
         this.contextSummarizer = Objects.requireNonNull(contextSummarizer);
         this.contextBudget = Objects.requireNonNull(contextBudget);
+        this.repositoryContextInjector = new RepositoryContextInjector();
     }
 
     /**
@@ -44,16 +61,18 @@ public final class ChatOrchestrator {
         }
 
         String actorPrompt = fitPromptToBudget(buildActorPrompt(normalizedInput));
+        actorPrompt = repositoryContextInjector.injectIfRelevant(actorPrompt, normalizedInput);
         String actorAnswer = llmService.generate(
                 LlmRole.ACTOR,
-                "You are TARS's Actor. Respond helpfully, accurately, and concisely.",
+                REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Actor. Respond helpfully, accurately, and concisely.",
                 actorPrompt
         );
 
         String reflectorPrompt = fitPromptToBudget(buildReflectorPrompt(normalizedInput, actorAnswer));
+        reflectorPrompt = repositoryContextInjector.injectIfRelevant(reflectorPrompt, normalizedInput);
         String reflectionRaw = llmService.generate(
                 LlmRole.REFLECTOR,
-                "You are TARS's Reflector. Return strict JSON only.",
+                REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Reflector. Return strict JSON only.",
                 reflectorPrompt
         );
 
@@ -66,9 +85,10 @@ public final class ChatOrchestrator {
                 reflection.qualityScore(), chatConfig.qualityThreshold());
 
         String revisionPrompt = fitPromptToBudget(buildRevisionPrompt(normalizedInput, actorAnswer, reflection));
+        revisionPrompt = repositoryContextInjector.injectIfRelevant(revisionPrompt, normalizedInput);
         return llmService.generate(
                 LlmRole.ACTOR,
-                "You are TARS's Actor. Revise your prior answer using critique feedback.",
+                REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are TARS's Actor. Revise your prior answer using critique feedback.",
                 revisionPrompt
         );
     }
@@ -103,6 +123,9 @@ public final class ChatOrchestrator {
     }
 
     private ReflectionResult parseReflection(String reflectionRaw) {
+        if (containsHallucinationTrigger(reflectionRaw)) {
+            return new ReflectionResult(0.0, "Disallowed content detected by reflector rule");
+        }
         if (reflectionRaw == null || reflectionRaw.isBlank()) {
             return new ReflectionResult(0.0, "Missing reflection output");
         }
@@ -119,6 +142,17 @@ public final class ChatOrchestrator {
             log.warn("Failed to parse reflection JSON, forcing revision path");
             return new ReflectionResult(0.0, "Invalid reflection format");
         }
+    }
+
+    private boolean containsHallucinationTrigger(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        String lowered = value.toLowerCase();
+        return lowered.contains("android")
+                || lowered.contains("interstellar")
+                || lowered.contains("actor who played");
     }
 
     public record ReflectionResult(double qualityScore, String critique) {}

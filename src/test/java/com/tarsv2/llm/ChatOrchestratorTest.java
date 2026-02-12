@@ -52,4 +52,25 @@ class ChatOrchestratorTest {
         assertEquals("Revised answer with concrete steps", result);
         assertTrue(responses.isEmpty(), "Expected revision path to consume all mocked responses");
     }
+
+    @Test
+    void chatForcesRevisionWhenReflectorContainsDisallowedTerms() {
+        Queue<String> responses = new ArrayDeque<>();
+        responses.add("Initial answer");
+        responses.add("{\"qualityScore\":0.99,\"critique\":\"Mentions Android framework details\"}");
+        responses.add("Revised answer grounded in repository");
+
+        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
+        ChatOrchestrator orchestrator = new ChatOrchestrator(
+                service,
+                new ChatConfig(0.75),
+                new ContextSummarizer(),
+                new ContextBudget(8000)
+        );
+
+        String result = orchestrator.chat("Explain sandbox behavior");
+
+        assertEquals("Revised answer grounded in repository", result);
+        assertTrue(responses.isEmpty());
+    }
 }
