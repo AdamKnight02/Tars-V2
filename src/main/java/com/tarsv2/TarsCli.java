@@ -395,8 +395,26 @@ public final class TarsCli implements Runnable {
                         dialogue.say("Proposal " + proposalId + " awaiting your approval.");
                     }
                 }
+                case "dev-loop" -> runDevLoop(improvementLoop, dialogue, "general performance");
+                case "dev-analyze" -> runDevAnalyze(learningEngine, dialogue);
+                case "dev-generate-tests" -> runDevLoop(improvementLoop, dialogue,
+                        "generate regression tests for recent reliability issues");
+                case "dev-propose-fix" -> runDevLoop(improvementLoop, dialogue,
+                        "propose a targeted fix based on latest learning signals");
                 default -> {
-                    if (input.startsWith("approve ")) {
+                    if (input.startsWith("dev-loop ")) {
+                        String scope = input.substring("dev-loop ".length()).trim();
+                        runDevLoop(improvementLoop, dialogue,
+                                scope.isEmpty() ? "general performance" : scope);
+                    } else if (input.startsWith("dev-generate-tests ")) {
+                        String scope = input.substring("dev-generate-tests ".length()).trim();
+                        runDevLoop(improvementLoop, dialogue,
+                                scope.isEmpty() ? "generate regression tests" : "generate tests for: " + scope);
+                    } else if (input.startsWith("dev-propose-fix ")) {
+                        String scope = input.substring("dev-propose-fix ".length()).trim();
+                        runDevLoop(improvementLoop, dialogue,
+                                scope.isEmpty() ? "propose targeted fix" : "propose fix for: " + scope);
+                    } else if (input.startsWith("approve ")) {
                         String id = input.substring(8).trim();
                         boolean ok = approvalGate.approve(id);
                         dialogue.say(ok ? "Proposal " + id + " approved. Proceeding." : "Not found or already decided.");
@@ -439,6 +457,10 @@ public final class TarsCli implements Runnable {
         dialogue.say("  metrics           — View observation metrics");
         dialogue.say("  learn             — Run learning engine analysis");
         dialogue.say("  improve           — Trigger self-improvement cycle");
+        dialogue.say("  dev-loop [scope]  — Run supervised dev improvement loop (optional scope)");
+        dialogue.say("  dev-analyze       — Analyze current metrics and dev recommendations");
+        dialogue.say("  dev-generate-tests [scope] — Propose test-generation improvements");
+        dialogue.say("  dev-propose-fix [scope] — Propose supervised fix improvements");
         dialogue.say("  proposals         — List pending change proposals");
         dialogue.say("  approve <id>      — Approve a proposal");
         dialogue.say("  reject <id>       — Reject a proposal");
@@ -450,6 +472,28 @@ public final class TarsCli implements Runnable {
         dialogue.say("  kill-switch       — Revoke all sudo sessions");
         dialogue.say("  sudo:<command>    — Execute with elevated privileges");
         dialogue.say("  quit              — Shut down TARS");
+    }
+
+
+    private void runDevLoop(SelfImprovementLoop improvementLoop, DialogueStyle dialogue, String scope) {
+        dialogue.say("Starting supervised dev loop for: " + scope);
+        String proposalId = improvementLoop.runCycle(scope);
+        if (proposalId != null) {
+            dialogue.say("Dev loop proposal " + proposalId + " awaiting approval.");
+        } else {
+            dialogue.say("No proposal generated for this scope.");
+        }
+    }
+
+    private void runDevAnalyze(LearningEngine learningEngine, DialogueStyle dialogue) {
+        dialogue.say("Running supervised dev analysis...");
+        var recommendations = learningEngine.analyze();
+        if (recommendations.isEmpty()) {
+            dialogue.say("No recommendations at this time.");
+            return;
+        }
+        recommendations.forEach(r -> dialogue.say(
+                "  [" + r.type() + "] " + r.agentName() + ": " + r.description()));
     }
 
     private void printBanner(DialogueStyle dialogue) {
