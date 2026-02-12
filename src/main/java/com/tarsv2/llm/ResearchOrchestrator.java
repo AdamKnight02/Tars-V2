@@ -28,11 +28,27 @@ public final class ResearchOrchestrator {
     private static final String INSUFFICIENT_CONTEXT_ERROR = "{\"error\":\"INSUFFICIENT_CONTEXT\"}";
 
     private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("LOW", "MODERATE", "HIGH");
+    private static final String REPOSITORY_GROUNDING_INSTRUCTION = """
+            You are TARS v2 running inside your own Java codebase.
+            You are NOT a fictional character.
+            You do NOT reference movies.
+            You do NOT explain Android or generic frameworks unless they exist in this repository.
+
+            If asked about systems (Intent, Sandbox, Agent, etc.),
+            you MUST reference actual classes and packages inside:
+            com.tarsv2.*
+
+            If the answer cannot be derived from repository structure,
+            respond:
+            "Insufficient repository context."
+            """.strip();
 
     private final LlmService llmService;
+    private final RepositoryContextInjector repositoryContextInjector;
 
     public ResearchOrchestrator(LlmService llmService) {
         this.llmService = Objects.requireNonNull(llmService);
+        this.repositoryContextInjector = new RepositoryContextInjector();
     }
 
     public String research(String userInput) {
@@ -41,7 +57,7 @@ public final class ResearchOrchestrator {
             return INSUFFICIENT_CONTEXT_ERROR;
         }
 
-        String actorPrompt = buildResearchPrompt(topic);
+        String actorPrompt = repositoryContextInjector.injectIfRelevant(buildResearchPrompt(topic), topic);
         JsonNode candidate = generateValidResearchJson(actorPrompt, topic);
         if (candidate == null) {
             return INVALID_JSON_ERROR;
@@ -53,7 +69,7 @@ public final class ResearchOrchestrator {
                 return toCanonicalJson(candidate);
             }
 
-            String revisionPrompt = buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique());
+            String revisionPrompt = repositoryContextInjector.injectIfRelevant(buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique()), topic);
             candidate = generateValidResearchJson(revisionPrompt, topic);
             if (candidate == null) {
                 return INVALID_JSON_ERROR;
@@ -68,7 +84,7 @@ public final class ResearchOrchestrator {
         for (int attempt = 0; attempt <= MAX_JSON_RETRIES; attempt++) {
             String raw = llmService.generate(
                     LlmRole.ACTOR,
-                    "You generate deterministic technical research proposals. Return JSON only.",
+                    REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou generate deterministic technical research proposals. Return JSON only.",
                     prompt
             );
 
@@ -77,10 +93,10 @@ public final class ResearchOrchestrator {
                 return parsed;
             }
 
-            prompt = "Your previous response was invalid. Return ONLY valid JSON following the required schema with no extra text.\n"
+            prompt = repositoryContextInjector.injectIfRelevant("Your previous response was invalid. Return ONLY valid JSON following the required schema with no extra text.\n"
                     + "Topic: " + topic + "\n"
                     + "Required schema:\n"
-                    + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}";
+                    + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}", topic);
         }
         return null;
     }
@@ -88,12 +104,16 @@ public final class ResearchOrchestrator {
     private ReflectionResult scoreResearch(JsonNode candidate, String topic) {
         String reflectionRaw = llmService.generate(
                 LlmRole.REFLECTOR,
-                "You are a strict quality validator. Score JSON output quality only. Return JSON only.",
-                "Evaluate this research JSON for schema compliance, technical specificity, and rollback clarity.\n"
+                REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are a strict quality validator. Score JSON output quality only. Return JSON only.",
+                repositoryContextInjector.injectIfRelevant("Evaluate this research JSON for schema compliance, technical specificity, and rollback clarity.\n"
                         + "Return ONLY JSON with schema {\"qualityScore\": <number 0.0 to 1.0>, \"critique\": \"<brief technical critique>\"}.\n"
                         + "Topic: " + topic + "\n"
-                        + "Candidate JSON:\n" + toCanonicalJson(candidate)
+                        + "Candidate JSON:\n" + toCanonicalJson(candidate), topic)
         );
+
+        if (containsHallucinationTrigger(reflectionRaw)) {
+            return new ReflectionResult(0.0, "Disallowed content detected by reflector rule");
+        }
 
         try {
             JsonNode root = MAPPER.readTree(reflectionRaw);
@@ -207,6 +227,17 @@ public final class ResearchOrchestrator {
         } catch (Exception e) {
             return INVALID_JSON_ERROR;
         }
+    }
+
+    private boolean containsHallucinationTrigger(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+
+        String lowered = value.toLowerCase();
+        return lowered.contains("android")
+                || lowered.contains("interstellar")
+                || lowered.contains("actor who played");
     }
 
     private record ReflectionResult(double qualityScore, String critique) {}
