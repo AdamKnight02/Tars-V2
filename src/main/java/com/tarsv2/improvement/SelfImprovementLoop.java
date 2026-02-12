@@ -91,7 +91,7 @@ public final class SelfImprovementLoop {
      * @return the proposal ID if a proposal was generated, or null if nothing to propose
      */
     public String runCycle(String context) {
-        dialogue.say("Starting self-improvement cycle for: " + context);
+        dialogue.say("Starting self-improvement cycle for: " + context, DialogueStyle.OutputMode.CHAT);
         profile.transitionEmotion(EmotionState.CURIOUS);
 
         // Step 1: Observe
@@ -105,7 +105,7 @@ public final class SelfImprovementLoop {
 
         if (!result.passed()) {
             profile.transitionEmotion(EmotionState.FRUSTRATED);
-            dialogue.say("Reflection loop did not converge. No proposal generated.");
+            dialogue.say("Reflection loop did not converge. No proposal generated.", DialogueStyle.OutputMode.CHAT);
             return null;
         }
 
@@ -120,7 +120,7 @@ public final class SelfImprovementLoop {
 
         // Step 4: Test in sandbox
         // TODO: Run actual tests against the proposal in the sandbox
-        dialogue.say("Sandbox testing: PASS (placeholder)");
+        dialogue.say("Sandbox testing: PASS (placeholder)", DialogueStyle.OutputMode.CHAT);
 
         // Step 5: Submit for approval
         String proposalId = approvalGate.submit(proposal);

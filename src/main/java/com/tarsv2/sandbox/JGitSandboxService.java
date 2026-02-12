@@ -56,7 +56,7 @@ public final class JGitSandboxService {
 
         if (Files.exists(gitDir)) {
             git = Git.open(root.toFile());
-            dialogue.say("Opened existing Git repo in sandbox.");
+            dialogue.say("Opened existing Git repo in sandbox.", DialogueStyle.OutputMode.CHAT);
             log.info("Opened JGit repository at {}", root);
         } else {
             git = Git.init().setDirectory(root.toFile()).call();
@@ -64,7 +64,7 @@ public final class JGitSandboxService {
             Files.writeString(root.resolve(".tars-init"), "TARS sandbox initialized\n");
             git.add().addFilepattern(".tars-init").call();
             git.commit().setMessage("Initial sandbox commit").call();
-            dialogue.say("Initialized new Git repo in sandbox.");
+            dialogue.say("Initialized new Git repo in sandbox.", DialogueStyle.OutputMode.CHAT);
             log.info("Initialized JGit repository at {}", root);
         }
     }
@@ -89,7 +89,7 @@ public final class JGitSandboxService {
             throw new SecurityException("TARS cannot write to branch: " + branchName);
         }
 
-        dialogue.say("Creating proposal branch: " + branchName);
+        dialogue.say("Creating proposal branch: " + branchName, DialogueStyle.OutputMode.CHAT);
 
         // Record HEAD before changes
         RevCommit baseCommit = git.log().setMaxCount(1).call().iterator().next();
@@ -123,7 +123,7 @@ public final class JGitSandboxService {
         );
         String id = approvalGate.submit(proposal);
 
-        dialogue.say("Proposal " + id + " created on branch " + branchName);
+        dialogue.say("Proposal " + id + " created on branch " + branchName, DialogueStyle.OutputMode.CHAT);
         return id;
     }
 
@@ -170,7 +170,7 @@ public final class JGitSandboxService {
         }
 
         git.branchDelete().setBranchNames(branchName).setForce(true).call();
-        dialogue.say("Reverted proposal " + proposalId + " — branch " + branchName + " deleted.");
+        dialogue.say("Reverted proposal " + proposalId + " — branch " + branchName + " deleted.", DialogueStyle.OutputMode.CHAT);
         log.info("Deleted proposal branch: {}", branchName);
     }
 
@@ -181,7 +181,7 @@ public final class JGitSandboxService {
     public boolean mergeIfApproved(String proposalId) throws IOException, GitAPIException {
         if (!approvalGate.isApproved(proposalId)) {
             log.warn("Cannot merge proposal {} — not approved", proposalId);
-            dialogue.say("Merge blocked — proposal " + proposalId + " is not approved. I'll wait.");
+            dialogue.say("Merge blocked — proposal " + proposalId + " is not approved. I'll wait.", DialogueStyle.OutputMode.CHAT);
             return false;
         }
 
@@ -199,7 +199,7 @@ public final class JGitSandboxService {
         // Clean up the proposal branch
         git.branchDelete().setBranchNames(branchName).setForce(true).call();
 
-        dialogue.say("Proposal " + proposalId + " merged. Another successful collaboration.");
+        dialogue.say("Proposal " + proposalId + " merged. Another successful collaboration.", DialogueStyle.OutputMode.CHAT);
         log.info("Merged proposal {} from branch {}", proposalId, branchName);
         return true;
     }
@@ -212,6 +212,18 @@ public final class JGitSandboxService {
                 .map(Ref::getName)
                 .filter(name -> name.contains("tars/proposal-"))
                 .toList();
+    }
+
+
+    /**
+     * Writes a file directly inside the sandbox workspace.
+     * Intended for supervised pre-proposal artifacts (e.g., failing tests).
+     */
+    public void writeSandboxFile(String relativePath, String content) throws IOException {
+        Path fullPath = sandbox.getRoot().resolve(relativePath);
+        Files.createDirectories(fullPath.getParent());
+        Files.writeString(fullPath, content);
+        log.info("Sandbox file written: {}", relativePath);
     }
 
     private String getDefaultBranch() {

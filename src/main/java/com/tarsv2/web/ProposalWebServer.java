@@ -67,7 +67,7 @@ public final class ProposalWebServer {
         server.setExecutor(null);
         server.start();
 
-        dialogue.say("Web UI started on port " + port + ". Humans, you know what to do.");
+        dialogue.say("Web UI started on port " + port + ". Humans, you know what to do.", DialogueStyle.OutputMode.CHAT);
         log.info("ProposalWebServer started on port {}", port);
     }
 

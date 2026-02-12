@@ -160,7 +160,7 @@ public final class MemorySystem {
         DecayReport report = new DecayReport(summarized, archived, deleted, getActiveCount());
         if (summarized + archived + deleted > 0) {
             log.info("Decay cycle: {}", report);
-            dialogue.say("Memory decay: " + report.toSummary());
+            dialogue.say("Memory decay: " + report.toSummary(), DialogueStyle.OutputMode.CHAT);
         }
         return report;
     }

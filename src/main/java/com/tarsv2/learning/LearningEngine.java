@@ -56,7 +56,7 @@ public final class LearningEngine {
             return recommendations;
         }
 
-        dialogue.say("Analyzing " + metrics.getTotalCount() + " task metrics for learning signals...");
+        dialogue.say("Analyzing " + metrics.getTotalCount() + " task metrics for learning signals...", DialogueStyle.OutputMode.CHAT);
 
         // Group metrics by agent
         Map<String, List<ObservationMetrics.TaskMetric>> byAgent = metrics.getAll().stream()
@@ -103,9 +103,9 @@ public final class LearningEngine {
         recommendations.sort(Comparator.comparingDouble(LearningRecommendation::priority).reversed());
 
         if (recommendations.isEmpty()) {
-            dialogue.say("All agents performing within acceptable bounds. No improvements needed right now.");
+            dialogue.say("All agents performing within acceptable bounds. No improvements needed right now.", DialogueStyle.OutputMode.CHAT);
         } else {
-            dialogue.say("Found " + recommendations.size() + " improvement opportunities.");
+            dialogue.say("Found " + recommendations.size() + " improvement opportunities.", DialogueStyle.OutputMode.CHAT);
         }
 
         return recommendations;

@@ -51,7 +51,7 @@ public final class ExampleMockScrapeTask {
      * @throws Exception if execution fails
      */
     public PodmanResult run() throws Exception {
-        dialogue.say("Spinning up mock scraper container...");
+        dialogue.say("Spinning up mock scraper container...", DialogueStyle.OutputMode.CHAT);
 
         // Uses Alpine to echo mock JSON — simulates a real scraper
         PodmanCommand cmd = podman.createCommand(
@@ -70,10 +70,10 @@ public final class ExampleMockScrapeTask {
         PodmanResult result = podman.execute(cmd);
 
         if (result.isSuccess()) {
-            dialogue.say("Mock scraper returned data. Not bad for a box with 512MB of RAM.");
+            dialogue.say("Mock scraper returned data. Not bad for a box with 512MB of RAM.", DialogueStyle.OutputMode.CHAT);
             log.info("Mock scrape output: {}", result.stdout());
         } else {
-            dialogue.say("Mock scraper failed. Stderr: " + result.stderr());
+            dialogue.say("Mock scraper failed. Stderr: " + result.stderr(), DialogueStyle.OutputMode.CHAT);
         }
 
         return result;

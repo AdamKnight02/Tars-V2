@@ -68,7 +68,7 @@ public final class TestFirstEnforcer {
         );
         IntentResult testWriteResult = openClaw.execute(writeTestIntent);
         if (!testWriteResult.success()) {
-            dialogue.say("Failed to write test: " + testWriteResult.errorMessage());
+            dialogue.say("Failed to write test: " + testWriteResult.errorMessage(), DialogueStyle.OutputMode.CHAT);
             return TestFirstResult.failed("Could not write test file", null);
         }
 
@@ -84,7 +84,7 @@ public final class TestFirstEnforcer {
         );
         IntentResult testRunResult = openClaw.execute(runTestIntent);
 
-        dialogue.say("Test submitted. Confirming failure in sandbox...");
+        dialogue.say("Test submitted. Confirming failure in sandbox...", DialogueStyle.OutputMode.CHAT);
 
         // Step 3: Only propose the fix if test infrastructure is ready
         ChangeProposal fixProposal = new ChangeProposal(

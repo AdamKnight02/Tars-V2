@@ -74,7 +74,7 @@ public final class VSCodeConnector {
         server.setExecutor(null);
         server.start();
 
-        dialogue.say("VS Code connector listening on 127.0.0.1:" + port);
+        dialogue.say("VS Code connector listening on 127.0.0.1:" + port, DialogueStyle.OutputMode.CHAT);
         log.info("VSCodeConnector started on port {}", port);
     }
 
@@ -136,7 +136,7 @@ public final class VSCodeConnector {
         permissions.requireCapability(DevCapability.PROPOSE_CHANGES);
 
         if (!approvalGate.isApproved(proposalId)) {
-            dialogue.say("Cannot apply: proposal " + proposalId + " is not approved.");
+            dialogue.say("Cannot apply: proposal " + proposalId + " is not approved.", DialogueStyle.OutputMode.CHAT);
             auditLog.record("VSCode", "APPLY_BLOCKED",
                     "Attempted apply of unapproved proposal " + proposalId, List.of());
             return false;
@@ -162,7 +162,7 @@ public final class VSCodeConnector {
         auditLog.record("VSCode", "APPLY_APPROVED",
                 "Applied approved proposal " + proposalId,
                 List.of(path));
-        dialogue.say("Patch applied for " + path + " (proposal " + proposalId + ").");
+        dialogue.say("Patch applied for " + path + " (proposal " + proposalId + ").", DialogueStyle.OutputMode.CHAT);
         return true;
     }
 

@@ -100,9 +100,9 @@ public final class GitHubConnector {
                 List.of());
 
         if (success) {
-            dialogue.say("Branch " + branchName + " created successfully.");
+            dialogue.say("Branch " + branchName + " created successfully.", DialogueStyle.OutputMode.CHAT);
         } else {
-            dialogue.say("Failed to create branch " + branchName + ".");
+            dialogue.say("Failed to create branch " + branchName + ".", DialogueStyle.OutputMode.CHAT);
         }
         return success;
     }
@@ -144,7 +144,7 @@ public final class GitHubConnector {
                 "Committed to " + branchName + ": " + truncate(message, 60),
                 List.of());
 
-        dialogue.say("Committed to " + branchName + ": " + truncate(message, 50));
+        dialogue.say("Committed to " + branchName + ": " + truncate(message, 50), DialogueStyle.OutputMode.CHAT);
         return commitSha;
     }
 
@@ -169,7 +169,7 @@ public final class GitHubConnector {
 
         if (!response.isSuccessful()) {
             response.close();
-            dialogue.say("Failed to open PR from " + headBranch + ".");
+            dialogue.say("Failed to open PR from " + headBranch + ".", DialogueStyle.OutputMode.CHAT);
             return -1;
         }
 
@@ -181,7 +181,7 @@ public final class GitHubConnector {
                 "Opened PR #" + prNumber + ": " + title,
                 List.of());
 
-        dialogue.say("PR #" + prNumber + " opened: " + title);
+        dialogue.say("PR #" + prNumber + " opened: " + title, DialogueStyle.OutputMode.CHAT);
         return prNumber;
     }
 
