@@ -9,9 +9,7 @@ import com.tarsv2.context.ContextSummarizer;
 import com.tarsv2.environment.*;
 import com.tarsv2.improvement.SelfImprovementLoop;
 import com.tarsv2.learning.LearningEngine;
-import com.tarsv2.llm.DualLlmOrchestrator;
-import com.tarsv2.llm.LlmClient;
-import com.tarsv2.llm.LlmRole;
+import com.tarsv2.llm.*;
 import com.tarsv2.memory.MemorySystem;
 import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.openclaw.OpenClawClient;
@@ -72,13 +70,17 @@ public final class TarsCli implements Runnable {
             defaultValue = "/tmp/tars-sandbox")
     private String sandboxDir;
 
-    @Option(names = {"--actor-endpoint"}, description = "Actor LLM endpoint URL",
-            defaultValue = "http://localhost:11434/api/generate")
-    private String actorEndpoint;
+    @Option(names = {"--ollama-url"}, description = "Ollama endpoint URL")
+    private String ollamaUrl = envOrDefault("TARS_OLLAMA_URL", "http://localhost:11434/api/generate");
 
-    @Option(names = {"--reflector-endpoint"}, description = "Reflector LLM endpoint URL",
-            defaultValue = "http://localhost:11435/api/generate")
-    private String reflectorEndpoint;
+    @Option(names = {"--actor-model"}, description = "Actor model name")
+    private String actorModel = envOrDefault("TARS_ACTOR_MODEL", "llama3:8b");
+
+    @Option(names = {"--reflector-model"}, description = "Reflector model name")
+    private String reflectorModel = envOrDefault("TARS_REFLECTOR_MODEL", "qwen2.5:14b");
+
+    @Option(names = {"--chat-quality-threshold"}, description = "Chat reflector quality threshold (0.0-1.0)")
+    private Double chatQualityThreshold;
 
     @Option(names = {"--web-port"}, description = "Web UI port for proposal review",
             defaultValue = "8080")
@@ -100,6 +102,19 @@ public final class TarsCli implements Runnable {
     public static void main(String[] args) {
         int exitCode = new CommandLine(new TarsCli()).execute(args);
         System.exit(exitCode);
+    }
+
+
+    private static String envOrDefault(String key, String fallback) {
+        String value = System.getenv(key);
+        return (value == null || value.isBlank()) ? fallback : value;
+    }
+
+    private static String resolveOllamaEndpoint(String configuredUrl) {
+        String trimmed = configuredUrl.endsWith("/")
+                ? configuredUrl.substring(0, configuredUrl.length() - 1)
+                : configuredUrl;
+        return trimmed.endsWith("/api/generate") ? trimmed : trimmed + "/api/generate";
     }
 
     @Override
@@ -150,8 +165,10 @@ public final class TarsCli implements Runnable {
         dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size());
 
         // ── Dual-LLM ────────────────────────────────────────────
-        LlmClient actor = new LlmClient(LlmRole.ACTOR, actorEndpoint, actorKeyHandle);
-        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, reflectorEndpoint, reflectorKeyHandle);
+        String ollamaEndpoint = resolveOllamaEndpoint(ollamaUrl);
+        LlmClient actor = new LlmClient(LlmRole.ACTOR, ollamaEndpoint, actorModel, actorKeyHandle);
+        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, ollamaEndpoint, reflectorModel, reflectorKeyHandle);
+        LlmService llmService = new DefaultLlmService(actor, reflector);
         DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(actor, reflector, dialogue);
 
         // ── Metrics & Learning ──────────────────────────────────
@@ -199,6 +216,13 @@ public final class TarsCli implements Runnable {
         // ── Context Discipline ──────────────────────────────────
         ContextBudget contextBudget = new ContextBudget(8000);
         ContextSummarizer contextSummarizer = new ContextSummarizer();
+        ChatConfig baseChatConfig = ChatConfig.fromEnvironment();
+        double threshold = chatQualityThreshold != null
+                ? Math.max(0.0, Math.min(1.0, chatQualityThreshold))
+                : baseChatConfig.qualityThreshold();
+        ChatConfig chatConfig = new ChatConfig(threshold);
+        ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
+                llmService, chatConfig, contextSummarizer, contextBudget);
 
         // ── Sudo Manager ────────────────────────────────────────
         String sudoPass = System.getenv("TARS_SUDO_PASS");
@@ -232,7 +256,7 @@ public final class TarsCli implements Runnable {
                 improvementLoop, podman, staging, metrics, learningEngine,
                 scraperTokenHandle, webServer, vscodeConnector,
                 auditLog, memorySystem, chunkLearning, sudoManager,
-                envRegistry, openClaw, contextBudget);
+                envRegistry, openClaw, contextBudget, chatOrchestrator);
     }
 
     /**
@@ -257,7 +281,8 @@ public final class TarsCli implements Runnable {
             SudoManager sudoManager,
             EnvironmentRegistry envRegistry,
             OpenClawClient openClaw,
-            ContextBudget contextBudget
+            ContextBudget contextBudget,
+            ChatOrchestrator chatOrchestrator
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -397,7 +422,8 @@ public final class TarsCli implements Runnable {
                                 () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.")
                         );
                     } else if (!input.isEmpty()) {
-                        dialogue.say("Unknown command: '" + input + "'. Type 'help' for options.");
+                        String reply = chatOrchestrator.chat(input);
+                        System.out.println("[TARS] " + reply);
                     }
                 }
             }

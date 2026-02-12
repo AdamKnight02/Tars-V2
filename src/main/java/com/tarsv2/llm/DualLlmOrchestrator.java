@@ -1,5 +1,8 @@
 package com.tarsv2.llm;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import com.tarsv2.personality.DialogueStyle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +26,7 @@ import java.util.Objects;
 public final class DualLlmOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(DualLlmOrchestrator.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Minimum quality score (0.0–1.0) required to proceed. */
     private static final double QUALITY_THRESHOLD = 0.7;
@@ -83,9 +87,9 @@ public final class DualLlmOrchestrator {
                     reflectorPrompt
             );
 
-            // TODO: Parse actual quality score from Reflector response
-            qualityScore = parseQualityScore(reflectionRaw);
-            reflectionFeedback = reflectionRaw;
+            ReflectionResult reflection = parseReflection(reflectionRaw);
+            qualityScore = reflection.qualityScore();
+            reflectionFeedback = reflection.critique();
 
             log.info(dialogue.narrate(String.format(
                     "Reflector score: %.2f (threshold: %.2f)", qualityScore, QUALITY_THRESHOLD)));
@@ -113,45 +117,32 @@ public final class DualLlmOrchestrator {
     }
 
     private String buildReflectorPrompt(String task, String actorOutput) {
-        return String.format(
-                "Task: %s\n\nActor output:\n%s\n\nEvaluate quality on a 0.0–1.0 scale. Provide specific feedback.",
-                task, actorOutput);
+        return "Evaluate the actor output and return ONLY valid JSON using this exact schema:\n"
+                + "{\"qualityScore\": <number 0.0 to 1.0>, \"critique\": \"<specific feedback>\"}\n\n"
+                + "Task:\n" + task + "\n\n"
+                + "Actor output:\n" + actorOutput;
     }
 
-    private double parseQualityScore(String reflectionRaw) {
+    private ReflectionResult parseReflection(String reflectionRaw) {
         if (reflectionRaw == null || reflectionRaw.isBlank()) {
-            return 0.0;
+            return new ReflectionResult(0.0, "Missing reflection output");
         }
 
-        // Try to extract a decimal score from patterns like "score: 0.85", "quality: 0.7", "0.9/1.0"
-        java.util.regex.Pattern[] scorePatterns = {
-                java.util.regex.Pattern.compile("(?i)(?:score|quality|rating)\\s*[:=]\\s*(\\d+\\.\\d+)"),
-                java.util.regex.Pattern.compile("(\\d+\\.\\d+)\\s*/\\s*1\\.0"),
-                java.util.regex.Pattern.compile("(0\\.\\d+)")
-        };
-
-        for (var pattern : scorePatterns) {
-            var matcher = pattern.matcher(reflectionRaw);
-            if (matcher.find()) {
-                try {
-                    double score = Double.parseDouble(matcher.group(1));
-                    if (score >= 0.0 && score <= 1.0) {
-                        return score;
-                    }
-                } catch (NumberFormatException ignored) {}
+        try {
+            JsonNode root = MAPPER.readTree(reflectionRaw);
+            double score = root.path("qualityScore").asDouble(0.0);
+            if (score < 0.0 || score > 1.0) {
+                score = 0.0;
             }
+            String critique = root.path("critique").asText(reflectionRaw);
+            return new ReflectionResult(score, critique);
+        } catch (Exception e) {
+            log.warn("Failed to parse reflector JSON score; using fallback revision score");
+            return new ReflectionResult(0.0, reflectionRaw);
         }
-
-        // Heuristic fallback based on sentiment keywords
-        String lower = reflectionRaw.toLowerCase();
-        if (lower.contains("excellent") || lower.contains("perfect")) return 0.95;
-        if (lower.contains("good") || lower.contains("solid")) return 0.8;
-        if (lower.contains("acceptable") || lower.contains("adequate")) return 0.7;
-        if (lower.contains("poor") || lower.contains("insufficient")) return 0.4;
-        if (lower.contains("terrible") || lower.contains("reject")) return 0.2;
-
-        return 0.6;
     }
+
+    private record ReflectionResult(double qualityScore, String critique) {}
 
     /**
      * Result of the dual-LLM orchestration process.

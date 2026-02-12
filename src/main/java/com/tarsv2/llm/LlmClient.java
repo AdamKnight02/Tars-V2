@@ -18,8 +18,7 @@ import java.util.concurrent.TimeUnit;
  * Client for communicating with a local or remote LLM endpoint.
  *
  * <p>Each instance is bound to a specific {@link LlmRole} (Actor or Reflector)
- * and talks to the corresponding model endpoint. Supports Ollama (Actor/LLaMA)
- * and OpenAI-compatible (Reflector/Qwen) HTTP APIs.</p>
+ * and talks to the corresponding model endpoint.</p>
  *
  * <p>All outbound prompts are sanitized via {@link PromptSanitizer}.
  * API keys are accessed only through opaque {@link SecretManager} handles.</p>
@@ -36,25 +35,29 @@ public final class LlmClient {
 
     private final LlmRole role;
     private final String endpoint;
+    private final String model;
     private final OkHttpClient httpClient;
     private final SecretManager.SecretHandle apiKeyHandle;
 
     /**
      * @param role     the LLM role this client serves
      * @param endpoint the model API endpoint (e.g., "http://localhost:11434/api/generate")
+     * @param model    the Ollama model name (e.g., "llama3:8b")
      */
-    public LlmClient(LlmRole role, String endpoint) {
-        this(role, endpoint, null);
+    public LlmClient(LlmRole role, String endpoint, String model) {
+        this(role, endpoint, model, null);
     }
 
     /**
      * @param role          the LLM role this client serves
      * @param endpoint      the model API endpoint
+     * @param model         the Ollama model name
      * @param apiKeyHandle  opaque handle to the API key (nullable for local models)
      */
-    public LlmClient(LlmRole role, String endpoint, SecretManager.SecretHandle apiKeyHandle) {
+    public LlmClient(LlmRole role, String endpoint, String model, SecretManager.SecretHandle apiKeyHandle) {
         this.role = Objects.requireNonNull(role);
         this.endpoint = Objects.requireNonNull(endpoint);
+        this.model = Objects.requireNonNull(model);
         this.apiKeyHandle = apiKeyHandle;
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
@@ -113,20 +116,9 @@ public final class LlmClient {
         try {
             ObjectNode root = mapper.createObjectNode();
 
-            if (role == LlmRole.ACTOR) {
-                // Ollama API format
-                root.put("model", "llama3");
-                root.put("system", systemPrompt);
-                root.put("prompt", userPrompt);
-                root.put("stream", false);
-            } else {
-                // OpenAI-compatible chat format (vLLM / Qwen)
-                root.put("model", "qwen2.5");
-                root.put("stream", false);
-                var messages = root.putArray("messages");
-                messages.addObject().put("role", "system").put("content", systemPrompt);
-                messages.addObject().put("role", "user").put("content", userPrompt);
-            }
+            root.put("model", model);
+            root.put("prompt", systemPrompt + "\n\n" + userPrompt);
+            root.put("stream", false);
 
             return mapper.writeValueAsString(root);
         } catch (Exception e) {
@@ -167,17 +159,6 @@ public final class LlmClient {
                 return root.get("response").asText();
             }
 
-            // OpenAI-compatible: { "choices": [{ "message": { "content": "..." } }] }
-            if (root.has("choices")) {
-                JsonNode choices = root.get("choices");
-                if (choices.isArray() && !choices.isEmpty()) {
-                    JsonNode message = choices.get(0).get("message");
-                    if (message != null && message.has("content")) {
-                        return message.get("content").asText();
-                    }
-                }
-            }
-
             log.warn("[{}] Could not parse standard response format, returning raw", role);
             return rawJson;
         } catch (Exception e) {
@@ -188,4 +169,5 @@ public final class LlmClient {
 
     public LlmRole getRole() { return role; }
     public String getEndpoint() { return endpoint; }
+    public String getModel() { return model; }
 }
