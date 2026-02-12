@@ -54,7 +54,7 @@ public final class DepopAgent implements TarsAgent {
 
     @Override
     public AgentResult execute(String query) throws AgentExecutionException {
-        dialogue.say("Diving into Depop data... fascinating chaos. Let's find the trends.");
+        dialogue.say("Diving into Depop data... fascinating chaos. Let's find the trends.", DialogueStyle.OutputMode.CHAT);
 
         try {
             PodmanCommand cmd = podman.createCommand(
@@ -66,7 +66,7 @@ public final class DepopAgent implements TarsAgent {
             PodmanResult result = podman.execute(cmd);
 
             if (result.isSuccess()) {
-                dialogue.say("Depop data collected. Analyzing trends...");
+                dialogue.say("Depop data collected. Analyzing trends...", DialogueStyle.OutputMode.CHAT);
                 // TODO: Feed result.stdout() into DualLlmOrchestrator for trend analysis
                 return AgentResult.success(
                         getName(),
@@ -74,7 +74,7 @@ public final class DepopAgent implements TarsAgent {
                         "Depop trend analysis complete for query: " + query
                 );
             } else {
-                dialogue.say("Scraper container had issues: " + result.stderr());
+                dialogue.say("Scraper container had issues: " + result.stderr(), DialogueStyle.OutputMode.CHAT);
                 return AgentResult.failure(getName(), "Container failed: " + result.stderr());
             }
 

@@ -55,7 +55,7 @@ public final class ResumeAgent implements TarsAgent {
 
     @Override
     public AgentResult execute(String resumePath) throws AgentExecutionException {
-        dialogue.say("Got a resume to analyze. Spinning up the parser container...");
+        dialogue.say("Got a resume to analyze. Spinning up the parser container...", DialogueStyle.OutputMode.CHAT);
 
         try {
             // TODO: Replace with actual resume parser container image
@@ -68,7 +68,7 @@ public final class ResumeAgent implements TarsAgent {
             PodmanResult result = podman.execute(cmd);
 
             if (result.isSuccess()) {
-                dialogue.say("Resume parsed successfully. Let me analyze the results...");
+                dialogue.say("Resume parsed successfully. Let me analyze the results...", DialogueStyle.OutputMode.CHAT);
                 // TODO: Feed result.stdout() into DualLlmOrchestrator for analysis
                 return AgentResult.success(
                         getName(),
@@ -76,7 +76,7 @@ public final class ResumeAgent implements TarsAgent {
                         "Resume parsed — structured data extracted."
                 );
             } else {
-                dialogue.say("Parser container failed. Stderr: " + result.stderr());
+                dialogue.say("Parser container failed. Stderr: " + result.stderr(), DialogueStyle.OutputMode.CHAT);
                 return AgentResult.failure(getName(), "Container failed: " + result.stderr());
             }
 

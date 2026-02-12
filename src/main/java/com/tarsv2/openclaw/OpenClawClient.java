@@ -70,7 +70,7 @@ public final class OpenClawClient {
         if (required != null && !permissions.hasCapability(required)) {
             String msg = "Missing capability " + required + " for intent " + intent.getType();
             log.warn(msg);
-            dialogue.say("Permission denied: " + required + " not granted.");
+            dialogue.say("Permission denied: " + required + " not granted.", DialogueStyle.OutputMode.CHAT);
             return IntentResult.failure(intentId, msg, elapsed(start));
         }
 

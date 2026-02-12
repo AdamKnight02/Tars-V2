@@ -67,7 +67,7 @@ public final class DepopScrapingTask {
         String taskId = UUID.randomUUID().toString().substring(0, 8);
         Instant start = Instant.now();
 
-        dialogue.say("Launching Depop scraper for: '" + query + "' (limit: " + limit + ")");
+        dialogue.say("Launching Depop scraper for: '" + query + "' (limit: " + limit + ")", DialogueStyle.OutputMode.CHAT);
 
         try {
             // Build container arguments
@@ -103,7 +103,7 @@ public final class DepopScrapingTask {
             long latencyMs = Duration.between(start, Instant.now()).toMillis();
 
             if (result.isSuccess()) {
-                dialogue.say("Depop scraper returned data. Parsing structured output...");
+                dialogue.say("Depop scraper returned data. Parsing structured output...", DialogueStyle.OutputMode.CHAT);
                 Map<String, Object> outputData = parseScraperOutput(result.stdout());
                 outputData.put("query", query);
                 outputData.put("container_duration_ms", result.duration().toMillis());
@@ -111,7 +111,7 @@ public final class DepopScrapingTask {
                 return AgentTaskOutput.success(taskId, "DepopScrapingTask",
                         outputData, 0.85, latencyMs);
             } else {
-                dialogue.say("Depop scraper failed with exit code " + result.exitCode());
+                dialogue.say("Depop scraper failed with exit code " + result.exitCode(), DialogueStyle.OutputMode.CHAT);
                 return AgentTaskOutput.failure(taskId, "DepopScrapingTask",
                         List.of("Container exit code: " + result.exitCode(),
                                 "Stderr: " + result.stderr()),
