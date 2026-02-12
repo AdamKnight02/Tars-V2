@@ -202,8 +202,9 @@ java -jar target/tars-v2-0.1.0-SNAPSHOT.jar
 java -jar target/tars-v2-0.1.0-SNAPSHOT.jar \
   --humor MAXIMUM \
   --sandbox-dir /tmp/my-sandbox \
-  --actor-endpoint http://localhost:11434/api/generate \
-  --reflector-endpoint http://localhost:11435/api/generate
+  --ollama-url http://localhost:11434 \
+  --actor-model llama3:8b \
+  --reflector-model qwen2.5:14b
 ```
 
 ## Interactive Commands
