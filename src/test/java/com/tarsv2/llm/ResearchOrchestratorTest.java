@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
 import java.util.Queue;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -65,5 +66,43 @@ class ResearchOrchestratorTest {
         String result = orchestrator.research("help");
 
         assertEquals("{\"error\":\"INSUFFICIENT_CONTEXT\"}", result);
+    }
+
+    @Test
+    void revisionOccursWhenReflectorContainsDisallowedTerms() {
+        Queue<String> responses = new ArrayDeque<>();
+        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
+        responses.add("{\"qualityScore\":0.99,\"critique\":\"Interstellar reference appeared\"}");
+        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks with repository classes\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
+        responses.add("{\"qualityScore\":0.91,\"critique\":\"Grounded and specific\"}");
+
+        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+
+        String result = orchestrator.research("Improve sandbox dispatcher behavior");
+
+        assertTrue(result.contains("repository classes"));
+        assertTrue(responses.isEmpty());
+    }
+
+    @Test
+    void researchInjectsRepositoryStructureForKeywordTopic() {
+        Queue<String> responses = new ArrayDeque<>();
+        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
+        responses.add("{\"qualityScore\":0.95,\"critique\":\"Grounded and specific\"}");
+
+        AtomicReference<String> actorPromptCapture = new AtomicReference<>("");
+        LlmService service = (role, systemPrompt, userPrompt) -> {
+            if (role == LlmRole.ACTOR && actorPromptCapture.get().isEmpty()) {
+                actorPromptCapture.set(userPrompt);
+            }
+            return responses.remove();
+        };
+
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+        String result = orchestrator.research("Improve Sandbox Environment dispatch behavior");
+
+        assertTrue(result.contains("sandbox dispatcher behavior"));
+        assertTrue(actorPromptCapture.get().contains("REPOSITORY CONTEXT:"));
     }
 }
