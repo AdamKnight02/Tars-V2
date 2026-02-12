@@ -8,174 +8,93 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-final class RepositoryContextInjector {
+public final class RepositoryContextInjector {
 
     private static final Logger log = LoggerFactory.getLogger(RepositoryContextInjector.class);
-    private static final Path SOURCE_ROOT = Paths.get("src/main/java");
-    private static final Path INTENT_SOURCE_ROOT = Paths.get("src/main/java/com/tarsv2/openclaw");
-    private static final String SOURCE_ROOT_SLASH = "src/main/java";
-    private static final Pattern TYPE_PATTERN = Pattern.compile(
-            "^\\s*(public|protected|private)?\\s*(abstract\\s+|final\\s+)?(class|interface|record|enum)\\s+([A-Za-z0-9_]+).*$"
+    private static final List<String> KEYWORDS = List.of("modify", "refactor", "architecture", "intent system", "orchestrator");
+    private static final List<Path> SOURCE_PATHS = List.of(
+            Paths.get("src/main/java/com/tarsv2/openclaw"),
+            Paths.get("src/main/java/com/tarsv2/llm"),
+            Paths.get("src/main/java/com/tarsv2/environment")
     );
-    private static final Pattern PUBLIC_FIELD_PATTERN = Pattern.compile(
-            "^\\s*public\\s+(?!class\\b|interface\\b|enum\\b|record\\b)(?!.*\\()(.+);\\s*$"
-    );
-    private static final Pattern PUBLIC_METHOD_PATTERN = Pattern.compile(
-            "^\\s*public\\s+[^=;{}]*\\([^;{}]*\\)\\s*(?:throws\\s+[^;{}]+)?\\s*(?:\\{|;)?\\s*$"
-    );
-    private static final int MAX_INJECTED_TOKENS = 2_000;
+    private static final Pattern TYPE_PATTERN = Pattern.compile("^\\s*(?:public\\s+)?(?:abstract\\s+|final\\s+)?(?:class|interface|record|enum)\\s+([A-Za-z0-9_]+).*$");
+    private static final Pattern METHOD_PATTERN = Pattern.compile("^\\s*public\\s+[^=;{}]*\\([^;{}]*\\)\\s*(?:throws\\s+[^;{}]+)?\\s*(?:\\{|;)?\\s*$");
 
-    InjectionResult injectIfRelevant(String prompt, String topic) {
-        Objects.requireNonNull(prompt);
-        if (!isIntentTopic(topic)) {
-            return InjectionResult.notTriggered(prompt);
+    public InjectionResult inject(String userPrompt) {
+        String prompt = userPrompt == null ? "" : userPrompt;
+        if (!isResearchPrompt(prompt)) {
+            return new InjectionResult(prompt, List.of());
         }
 
-        List<Path> sourceFiles = loadIntentSourceFiles();
-        if (sourceFiles.isEmpty()) {
-            String block = "REPOSITORY CONTEXT: None found.";
-            String injectedPrompt = block + "\n\n" + prompt;
-            return new InjectionResult(true, List.of(), injectedPrompt, block, "intent");
+        List<FileSignature> signatures = collectSignatures();
+        StringBuilder context = new StringBuilder("REPOSITORY_CONTEXT\n");
+        for (FileSignature signature : signatures) {
+            context.append("File: ").append(signature.path()).append("\n");
+            context.append("Class: ").append(signature.className()).append("\n");
+            context.append("Public methods:\n");
+            if (signature.publicMethods().isEmpty()) {
+                context.append("- None\n");
+            } else {
+                signature.publicMethods().forEach(method -> context.append("- ").append(method).append("\n"));
+            }
+            context.append("\n");
         }
 
-        String extracted = buildExtractedContent(sourceFiles);
-        String block = "---\nREPOSITORY CONTEXT:\n" + extracted + "\n---";
-        String injectedPrompt = block + "\n\n" + prompt;
-        List<String> selected = sourceFiles.stream()
-                .map(this::toRepositoryPath)
-                .toList();
-        return new InjectionResult(true, selected, injectedPrompt, block, "intent");
+        List<String> referenced = signatures.stream().map(FileSignature::path).toList();
+        return new InjectionResult(context + "\n" + prompt, referenced);
     }
 
-    private boolean isIntentTopic(String topic) {
-        return topic != null && topic.toLowerCase().contains("intent");
+    private boolean isResearchPrompt(String prompt) {
+        String lowered = prompt.toLowerCase();
+        return KEYWORDS.stream().anyMatch(lowered::contains);
     }
 
-    private List<Path> loadIntentSourceFiles() {
-        if (!Files.isDirectory(INTENT_SOURCE_ROOT)) {
-            return List.of();
-        }
-
-        try (Stream<Path> files = Files.walk(INTENT_SOURCE_ROOT)) {
-            return files
-                    .filter(path -> path.toString().endsWith(".java"))
-                    .sorted()
-                    .toList();
-        } catch (IOException e) {
-            log.warn("Failed to load Intent repository context files", e);
-            return List.of();
-        }
-    }
-
-    private String buildExtractedContent(List<Path> sourceFiles) {
-        StringBuilder builder = new StringBuilder();
-        int tokenCount = 0;
-        for (Path sourceFile : sourceFiles) {
-            String fileSection = extractFileSection(sourceFile);
-            if (fileSection.isBlank()) {
+    private List<FileSignature> collectSignatures() {
+        Set<FileSignature> signatures = new LinkedHashSet<>();
+        for (Path sourcePath : SOURCE_PATHS) {
+            if (!Files.isDirectory(sourcePath)) {
                 continue;
             }
-
-            String nextSection = builder.length() == 0 ? fileSection : "\n\n" + fileSection;
-            int nextTokens = countTokens(nextSection);
-            if (tokenCount + nextTokens <= MAX_INJECTED_TOKENS) {
-                builder.append(nextSection);
-                tokenCount += nextTokens;
-                continue;
+            try (Stream<Path> files = Files.walk(sourcePath)) {
+                files.filter(path -> path.toString().endsWith(".java"))
+                        .sorted()
+                        .map(this::parseSignature)
+                        .forEach(signatures::add);
+            } catch (IOException e) {
+                log.debug("Unable to read source path {}", sourcePath, e);
             }
-
-            int remaining = MAX_INJECTED_TOKENS - tokenCount;
-            if (remaining > 0) {
-                builder.append(trimToTokenLimit(nextSection, remaining));
-            }
-            break;
         }
-
-        return builder.toString();
+        return new ArrayList<>(signatures);
     }
 
-    private int countTokens(String text) {
-        if (text == null || text.isBlank()) {
-            return 0;
-        }
-        return text.trim().split("\\s+").length;
-    }
-
-    private String trimToTokenLimit(String text, int tokenLimit) {
-        if (text == null || text.isBlank() || tokenLimit <= 0) {
-            return "";
-        }
-
-        String[] tokens = text.trim().split("\\s+");
-        int end = Math.min(tokenLimit, tokens.length);
-        return String.join(" ", java.util.Arrays.copyOfRange(tokens, 0, end));
-    }
-
-    private String extractFileSection(Path path) {
+    private FileSignature parseSignature(Path path) {
         String className = "Unknown";
-        List<String> publicFields = new ArrayList<>();
-        List<String> publicMethods = new ArrayList<>();
+        List<String> methods = new ArrayList<>();
         try {
-            List<String> lines = Files.readAllLines(path);
-            for (String line : lines) {
+            for (String line : Files.readAllLines(path)) {
                 Matcher typeMatcher = TYPE_PATTERN.matcher(line);
                 if (typeMatcher.matches()) {
-                    className = typeMatcher.group(4);
+                    className = typeMatcher.group(1);
                 }
-
-                Matcher fieldMatcher = PUBLIC_FIELD_PATTERN.matcher(line);
-                if (fieldMatcher.matches()) {
-                    publicFields.add("public " + fieldMatcher.group(1).trim() + ";");
-                }
-
-                Matcher methodMatcher = PUBLIC_METHOD_PATTERN.matcher(line);
+                Matcher methodMatcher = METHOD_PATTERN.matcher(line);
                 if (methodMatcher.matches()) {
-                    String methodLine = line.trim();
-                    if (methodLine.endsWith("{")) {
-                        methodLine = methodLine.substring(0, methodLine.length() - 1).trim();
-                    }
-                    publicMethods.add(methodLine.endsWith(";") ? methodLine : methodLine + ";");
+                    methods.add(line.trim().replace("{", "").trim());
                 }
             }
         } catch (IOException e) {
-            log.debug("Failed reading {}", path, e);
-            return "";
+            log.debug("Unable to parse {}", path, e);
         }
-
-        String relativePath = toRepositoryPath(path);
-        String fields = publicFields.isEmpty() ? "- None" : publicFields.stream().map(v -> "- " + v).collect(java.util.stream.Collectors.joining("\n"));
-        String methods = publicMethods.isEmpty() ? "- None" : publicMethods.stream().map(v -> "- " + v).collect(java.util.stream.Collectors.joining("\n"));
-
-        return "File: " + relativePath + "\n"
-                + "Class: " + className + "\n"
-                + "Public fields:\n" + fields + "\n"
-                + "Public methods:\n" + methods;
+        return new FileSignature(path.toString().replace('\\', '/'), className, List.copyOf(methods));
     }
 
-    private String toRepositoryPath(Path path) {
-        String relativePath = SOURCE_ROOT.relativize(path).toString().replace('\\', '/');
-        return SOURCE_ROOT_SLASH + "/" + relativePath;
-    }
+    public record InjectionResult(String augmentedPrompt, List<String> referencedFiles) {}
 
-    record InjectionResult(
-            boolean keywordTriggered,
-            List<String> selectedFiles,
-            String prompt,
-            String appendedBlock,
-            String triggeredKeyword
-    ) {
-        static InjectionResult notTriggered(String prompt) {
-            return new InjectionResult(false, List.of(), prompt, "", "");
-        }
-
-        int injectedCharacters() {
-            return appendedBlock.length();
-        }
-    }
+    private record FileSignature(String path, String className, List<String> publicMethods) {}
 }

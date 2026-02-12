@@ -2,24 +2,15 @@ package com.tarsv2.llm;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 
-/**
- * Deterministic research orchestration that enforces strict JSON-only output.
- */
 public final class ResearchOrchestrator {
 
-    private static final Logger log = LoggerFactory.getLogger(ResearchOrchestrator.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private static final int MAX_JSON_RETRIES = 3;
     private static final int MAX_QUALITY_REVISIONS = 2;
     private static final double QUALITY_THRESHOLD = 0.75;
@@ -28,20 +19,6 @@ public final class ResearchOrchestrator {
     private static final String INSUFFICIENT_CONTEXT_ERROR = "{\"error\":\"INSUFFICIENT_CONTEXT\"}";
 
     private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("LOW", "MODERATE", "HIGH");
-    private static final String REPOSITORY_GROUNDING_INSTRUCTION = """
-            You are TARS v2 running inside your own Java codebase.
-            You are NOT a fictional character.
-            You do NOT reference movies.
-            You do NOT explain Android or generic frameworks unless they exist in this repository.
-
-            If asked about systems (Intent, Sandbox, Agent, etc.),
-            you MUST reference actual classes and packages inside:
-            com.tarsv2.*
-
-            If the answer cannot be derived from repository structure,
-            respond:
-            "Insufficient repository context."
-            """.strip();
 
     private final LlmService llmService;
     private final RepositoryContextInjector repositoryContextInjector;
@@ -57,10 +34,8 @@ public final class ResearchOrchestrator {
             return INSUFFICIENT_CONTEXT_ERROR;
         }
 
-        RepositoryContextInjector.InjectionResult actorInjection = repositoryContextInjector.injectIfRelevant(buildResearchPrompt(topic), topic);
-        logResearchInjection(actorInjection);
-        String actorPrompt = actorInjection.prompt();
-        JsonNode candidate = generateValidResearchJson(actorPrompt, topic);
+        RepositoryContextInjector.InjectionResult injection = repositoryContextInjector.inject(buildResearchPrompt(topic));
+        JsonNode candidate = generateValidResearchJson(injection.augmentedPrompt(), topic);
         if (candidate == null) {
             return INVALID_JSON_ERROR;
         }
@@ -71,13 +46,9 @@ public final class ResearchOrchestrator {
                 return toCanonicalJson(candidate);
             }
 
-            RepositoryContextInjector.InjectionResult revisionInjection = repositoryContextInjector.injectIfRelevant(
-                    buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique()),
-                    topic
-            );
-            logResearchInjection(revisionInjection);
-            String revisionPrompt = revisionInjection.prompt();
-            candidate = generateValidResearchJson(revisionPrompt, topic);
+            RepositoryContextInjector.InjectionResult revisionInjection = repositoryContextInjector.inject(
+                    buildRevisionPrompt(topic, toCanonicalJson(candidate), review.critique()));
+            candidate = generateValidResearchJson(revisionInjection.augmentedPrompt(), topic);
             if (candidate == null) {
                 return INVALID_JSON_ERROR;
             }
@@ -91,7 +62,7 @@ public final class ResearchOrchestrator {
         for (int attempt = 0; attempt <= MAX_JSON_RETRIES; attempt++) {
             String raw = llmService.generate(
                     LlmRole.ACTOR,
-                    REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou generate deterministic technical research proposals. Return JSON only.",
+                    "Return JSON only.",
                     prompt
             );
 
@@ -100,15 +71,8 @@ public final class ResearchOrchestrator {
                 return parsed;
             }
 
-            RepositoryContextInjector.InjectionResult injection = repositoryContextInjector.injectIfRelevant(
-                    "Your previous response was invalid. Return ONLY valid JSON following the required schema with no extra text.\n"
-                            + "Topic: " + topic + "\n"
-                            + "Required schema:\n"
-                            + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}",
-                    topic
-            );
-            logResearchInjection(injection);
-            prompt = injection.prompt();
+            prompt = repositoryContextInjector.inject(
+                    "Your previous response was invalid. Return ONLY valid JSON. Topic: " + topic).augmentedPrompt();
         }
         return null;
     }
@@ -116,7 +80,7 @@ public final class ResearchOrchestrator {
     private ReflectionResult scoreResearch(JsonNode candidate, String topic) {
         String reflectionRaw = llmService.generate(
                 LlmRole.REFLECTOR,
-                REPOSITORY_GROUNDING_INSTRUCTION + "\n\nYou are a strict quality validator. Score JSON output quality only. Return JSON only.",
+                "Score JSON output quality only. Return JSON only.",
                 buildScoringPrompt(candidate, topic)
         );
 
@@ -133,7 +97,6 @@ public final class ResearchOrchestrator {
             String critique = root.path("critique").asText("No critique provided");
             return new ReflectionResult(score, critique);
         } catch (Exception e) {
-            log.warn("Invalid reflector output during research scoring");
             return new ReflectionResult(0.0, "Invalid reflection format");
         }
     }
@@ -157,27 +120,15 @@ public final class ResearchOrchestrator {
             if (!object.path("summary").isTextual()) {
                 return null;
             }
-
-            JsonNode affectedFiles = object.path("affected_files");
-            if (!affectedFiles.isArray()) {
+            if (!object.path("affected_files").isArray()) {
                 return null;
             }
-            ArrayNode files = (ArrayNode) affectedFiles;
-            for (JsonNode file : files) {
-                if (!file.isTextual()) {
-                    return null;
-                }
-            }
-
             if (!object.path("diff").isTextual()) {
                 return null;
             }
-
-            String riskLevel = object.path("risk_level").asText("");
-            if (!ALLOWED_RISK_LEVELS.contains(riskLevel)) {
+            if (!ALLOWED_RISK_LEVELS.contains(object.path("risk_level").asText(""))) {
                 return null;
             }
-
             if (!object.path("rollback_instructions").isTextual()) {
                 return null;
             }
@@ -189,50 +140,25 @@ public final class ResearchOrchestrator {
     }
 
     private String buildScoringPrompt(JsonNode candidate, String topic) {
-        RepositoryContextInjector.InjectionResult injection = repositoryContextInjector.injectIfRelevant(
-                "Evaluate this research JSON for schema compliance, technical specificity, and rollback clarity.\n"
-                        + "Return ONLY JSON with schema {\"qualityScore\": <number 0.0 to 1.0>, \"critique\": \"<brief technical critique>\"}.\n"
-                        + "Topic: " + topic + "\n"
-                        + "Candidate JSON:\n" + toCanonicalJson(candidate),
-                topic
-        );
-        logResearchInjection(injection);
-        return injection.prompt();
-    }
-
-    private void logResearchInjection(RepositoryContextInjector.InjectionResult injection) {
-        try {
-            Object filesInjected = injection.getClass().getMethod("filesInjected").invoke(injection);
-            Object charsInjected = injection.getClass().getMethod("charsInjected").invoke(injection);
-            log.info("Research injection: files={}, chars={}", filesInjected, charsInjected);
-        } catch (ReflectiveOperationException ignored) {
-            // Optional metrics are not available in this InjectionResult version.
-        }
+        return repositoryContextInjector.inject(
+                "Evaluate research JSON quality. Return JSON with {\"qualityScore\": <number>, \"critique\": \"text\"}.\nTopic: "
+                        + topic + "\nCandidate:\n" + toCanonicalJson(candidate)).augmentedPrompt();
     }
 
     private boolean hasExactFields(ObjectNode object, Set<String> required) {
         Set<String> actual = new LinkedHashSet<>();
-        Iterator<String> fields = object.fieldNames();
-        while (fields.hasNext()) {
-            actual.add(fields.next());
-        }
+        object.fieldNames().forEachRemaining(actual::add);
         return actual.equals(required);
     }
 
     private String buildResearchPrompt(String topic) {
-        return "Generate a technical research proposal for the following topic and return JSON only.\n"
-                + "Topic: " + topic + "\n"
-                + "Schema:\n"
+        return "Generate a technical research proposal for topic: " + topic + " and return JSON only with schema:"
                 + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}";
     }
 
     private String buildRevisionPrompt(String topic, String priorJson, String critique) {
-        return "Revise the prior proposal using critique and return ONLY JSON with the required schema.\n"
-                + "Topic: " + topic + "\n"
-                + "Prior JSON:\n" + priorJson + "\n"
-                + "Critique:\n" + critique + "\n"
-                + "Schema:\n"
-                + "{\"summary\":string,\"affected_files\":[string],\"diff\":string,\"risk_level\":\"LOW|MODERATE|HIGH\",\"rollback_instructions\":string}";
+        return "Revise prior proposal and return ONLY JSON. Topic: " + topic + "\nPrior JSON:\n" + priorJson
+                + "\nCritique:\n" + critique;
     }
 
     private String normalize(String input) {
@@ -240,16 +166,8 @@ public final class ResearchOrchestrator {
     }
 
     private boolean isInsufficientContext(String input) {
-        if (input.isBlank()) {
-            return true;
-        }
-
-        String lowered = input.toLowerCase();
-        if (Set.of("help", "improve", "research", "something better", "fix it").contains(lowered)) {
-            return true;
-        }
-
-        return input.split("\\s+").length < 3;
+        if (input.isBlank()) return true;
+        return input.split("\\s+").length < 2;
     }
 
     private String toCanonicalJson(JsonNode node) {
@@ -264,11 +182,8 @@ public final class ResearchOrchestrator {
         if (value == null || value.isBlank()) {
             return false;
         }
-
         String lowered = value.toLowerCase();
-        return lowered.contains("android")
-                || lowered.contains("interstellar")
-                || lowered.contains("actor who played");
+        return lowered.contains("android") || lowered.contains("interstellar");
     }
 
     private record ReflectionResult(double qualityScore, String critique) {}

@@ -7,27 +7,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class RepositoryContextInjectorTest {
 
     @Test
-    void injectsRepositoryContextForIntentKeywordCaseInsensitive() {
+    void injectsRepositoryContextForResearchKeywords() {
         RepositoryContextInjector injector = new RepositoryContextInjector();
 
-        RepositoryContextInjector.InjectionResult result = injector.injectIfRelevant("Prompt", "Explain INTENT flows");
+        RepositoryContextInjector.InjectionResult result = injector.inject("Please refactor the orchestrator architecture");
 
-        assertTrue(result.keywordTriggered());
-        assertTrue(result.prompt().contains("REPOSITORY CONTEXT:"));
-        assertTrue(result.prompt().contains("src/main/java/com/tarsv2/openclaw")
-                        || result.prompt().contains("com/tarsv2/openclaw"),
-                "Expected injected prompt to include openclaw file paths");
-        assertTrue(result.injectedCharacters() > 0);
+        assertTrue(result.augmentedPrompt().contains("REPOSITORY_CONTEXT"));
+        assertFalse(result.referencedFiles().isEmpty());
     }
 
     @Test
     void doesNotInjectWhenKeywordAbsent() {
         RepositoryContextInjector injector = new RepositoryContextInjector();
 
-        RepositoryContextInjector.InjectionResult result = injector.injectIfRelevant("Prompt", "Explain sandbox behavior");
+        RepositoryContextInjector.InjectionResult result = injector.inject("hello there");
 
-        assertFalse(result.keywordTriggered());
-        assertEquals("Prompt", result.prompt());
-        assertEquals(0, result.injectedCharacters());
+        assertEquals("hello there", result.augmentedPrompt());
+        assertTrue(result.referencedFiles().isEmpty());
     }
 }

@@ -2,6 +2,7 @@ package com.tarsv2;
 
 import com.tarsv2.agent.*;
 import com.tarsv2.approval.ApprovalGate;
+import com.tarsv2.approval.ProposalRegistry;
 import com.tarsv2.chunk.ChunkLearningEngine;
 import com.tarsv2.connector.*;
 import com.tarsv2.context.ContextBudget;
@@ -11,6 +12,9 @@ import com.tarsv2.improvement.SelfImprovementLoop;
 import com.tarsv2.improvement.SupervisedDevLoop;
 import com.tarsv2.learning.LearningEngine;
 import com.tarsv2.llm.*;
+import com.tarsv2.codex.CodexOrchestrator;
+import com.tarsv2.codex.PatchProposal;
+import com.tarsv2.codex.PatchValidator;
 import com.tarsv2.memory.MemorySystem;
 import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.openclaw.OpenClawClient;
@@ -18,6 +22,7 @@ import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
 import com.tarsv2.sandbox.GitStagingService;
 import com.tarsv2.sandbox.JGitSandboxService;
+import com.tarsv2.sandbox.SandboxGitService;
 import com.tarsv2.sandbox.SandboxEnvironment;
 import com.tarsv2.security.SecretManager;
 import com.tarsv2.sudo.SudoManager;
@@ -133,6 +138,7 @@ public final class TarsCli implements Runnable {
 
         // ── Safety: Immutable Approval Gate ──────────────────────
         ApprovalGate approvalGate = new ApprovalGate();
+        ProposalRegistry proposalRegistry = new ProposalRegistry();
 
         // ── Sandbox ──────────────────────────────────────────────
         SandboxEnvironment sandbox = new SandboxEnvironment(Path.of(sandboxDir));
@@ -231,6 +237,9 @@ public final class TarsCli implements Runnable {
         ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
                 llmService, chatConfig, contextSummarizer, contextBudget);
         ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(llmService);
+        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(llmService);
+        PatchValidator patchValidator = new PatchValidator();
+        SandboxGitService sandboxGitService = new SandboxGitService(Path.of("."));
 
         // ── Sudo Manager ────────────────────────────────────────
         String sudoPass = System.getenv("TARS_SUDO_PASS");
@@ -249,7 +258,7 @@ public final class TarsCli implements Runnable {
         }
 
         // ── Web UI ──────────────────────────────────────────────
-        ProposalWebServer webServer = new ProposalWebServer(approvalGate, dialogue, webPort);
+        ProposalWebServer webServer = new ProposalWebServer(proposalRegistry, dialogue, webPort);
         try {
             webServer.start();
         } catch (Exception e) {
@@ -263,7 +272,8 @@ public final class TarsCli implements Runnable {
                 improvementLoop, supervisedDevLoop, podman, staging, metrics, learningEngine,
                 scraperTokenHandle, webServer, vscodeConnector,
                 auditLog, memorySystem, chunkLearning, sudoManager,
-                envRegistry, openClaw, contextBudget, chatOrchestrator, researchOrchestrator);
+                envRegistry, openClaw, contextBudget, chatOrchestrator, researchOrchestrator,
+                codexOrchestrator, patchValidator, sandboxGitService, proposalRegistry);
     }
 
     /**
@@ -291,7 +301,11 @@ public final class TarsCli implements Runnable {
             OpenClawClient openClaw,
             ContextBudget contextBudget,
             ChatOrchestrator chatOrchestrator,
-            ResearchOrchestrator researchOrchestrator
+            ResearchOrchestrator researchOrchestrator,
+            CodexOrchestrator codexOrchestrator,
+            PatchValidator patchValidator,
+            SandboxGitService sandboxGitService,
+            ProposalRegistry proposalRegistry
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -337,7 +351,7 @@ public final class TarsCli implements Runnable {
                 case "help" -> printHelp(dialogue);
                 case "status" -> {
                     dialogue.say("Profile: " + profile, DialogueStyle.OutputMode.CHAT);
-                    dialogue.say("Pending proposals: " + approvalGate.getPendingProposals().size(), DialogueStyle.OutputMode.CHAT);
+                    dialogue.say("Pending proposals: " + proposalRegistry.getPending().size(), DialogueStyle.OutputMode.CHAT);
                     dialogue.say("Registered agents: " + registry.getAll().size(), DialogueStyle.OutputMode.CHAT);
                     dialogue.say("Metrics recorded: " + metrics.getTotalCount(), DialogueStyle.OutputMode.CHAT);
                     dialogue.say("Environments: " + envRegistry.size(), DialogueStyle.OutputMode.CHAT);
@@ -348,7 +362,7 @@ public final class TarsCli implements Runnable {
                 case "agents" -> registry.getAll().forEach(a ->
                         dialogue.say("  " + a.getName() + " — " + a.getDescription(), DialogueStyle.OutputMode.CHAT));
                 case "proposals" -> {
-                    var pending = approvalGate.getPendingProposals();
+                    var pending = proposalRegistry.getPending();
                     if (pending.isEmpty()) {
                         dialogue.say("No pending proposals. I'm behaving.", DialogueStyle.OutputMode.CHAT);
                     } else {
@@ -451,11 +465,48 @@ public final class TarsCli implements Runnable {
                 default -> {
                     if (input.startsWith("approve ")) {
                         String id = input.substring(8).trim();
-                        boolean ok = approvalGate.approve(id);
-                        dialogue.say(ok ? "Proposal " + id + " approved. Proceeding." : "Not found or already decided.", DialogueStyle.OutputMode.CHAT);
+                        java.util.UUID uuid;
+                        try {
+                            uuid = java.util.UUID.fromString(id);
+                        } catch (IllegalArgumentException ex) {
+                            dialogue.say("Invalid proposal ID format.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        boolean ok = proposalRegistry.approve(uuid);
+                        if (!ok) {
+                            dialogue.say("Not found or already decided.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        var proposal = proposalRegistry.get(uuid).orElse(null);
+                        if (proposal == null) {
+                            dialogue.say("Proposal missing.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        boolean patchApplied = sandboxGitService.applyPatch(proposal.getDiff());
+                        if (!patchApplied) {
+                            proposalRegistry.updateStatus(uuid, PatchProposal.Status.FAILED, "git apply failed");
+                            dialogue.say("Proposal " + id + " failed during patch apply.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        boolean testsPassed = sandboxGitService.runTests();
+                        if (!testsPassed) {
+                            proposalRegistry.updateStatus(uuid, PatchProposal.Status.FAILED, "mvn test failed; rollback executed");
+                            dialogue.say("Proposal " + id + " failed tests and was rolled back.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        sandboxGitService.commit("Apply approved patch proposal " + id);
+                        proposalRegistry.updateStatus(uuid, PatchProposal.Status.APPLIED, "Patch applied and committed");
+                        dialogue.say("Proposal " + id + " applied.", DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("reject ")) {
                         String id = input.substring(7).trim();
-                        boolean ok = approvalGate.reject(id);
+                        java.util.UUID uuid;
+                        try {
+                            uuid = java.util.UUID.fromString(id);
+                        } catch (IllegalArgumentException ex) {
+                            dialogue.say("Invalid proposal ID format.", DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        boolean ok = proposalRegistry.reject(uuid);
                         dialogue.say(ok ? "Proposal " + id + " rejected. Discarding." : "Not found or already decided.", DialogueStyle.OutputMode.CHAT);
                         if (ok) memorySystem.onRejection(id);
                     } else if (input.startsWith("run ")) {
@@ -472,6 +523,26 @@ public final class TarsCli implements Runnable {
                                 },
                                 () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.", DialogueStyle.OutputMode.CHAT)
                         );
+                    } else if (input.startsWith("codex ")) {
+                        String topic = input.substring("codex ".length()).trim();
+                        String codexOutput = codexOrchestrator.generateDiffOnly(topic);
+                        String diff = codexOrchestrator.extractDiff(codexOutput);
+                        PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
+                        PatchProposal proposal = new PatchProposal(
+                                java.util.UUID.randomUUID(),
+                                diff,
+                                topic,
+                                "src/main/java/com/tarsv2",
+                                PatchProposal.Status.PENDING
+                        );
+                        proposalRegistry.submit(proposal, validationResult.referencedFiles(), validationResult.message());
+                        if (!validationResult.valid()) {
+                            proposalRegistry.updateStatus(proposal.getId(), PatchProposal.Status.FAILED, validationResult.message());
+                            dialogue.say("Codex proposal rejected by validator: " + validationResult.message(), DialogueStyle.OutputMode.CHAT);
+                            continue;
+                        }
+                        System.out.println(codexOutput);
+                        dialogue.say("Codex proposal created: " + proposal.getId(), DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
@@ -484,15 +555,16 @@ public final class TarsCli implements Runnable {
                             continue;
                         }
 
-                        String proposalId = java.util.UUID.randomUUID().toString();
-                        var proposal = new com.tarsv2.approval.ChangeProposal(
-                                proposalId,
-                                proposedChange.get().summary(),
+                        var proposal = new PatchProposal(
+                                java.util.UUID.randomUUID(),
                                 proposedChange.get().diff(),
-                                proposedChange.get().rationale()
+                                proposedChange.get().summary(),
+                                "src/main/java/com/tarsv2",
+                                PatchProposal.Status.PENDING
                         );
-                        approvalGate.submit(proposal);
-                        dialogue.say("Proposal created with ID: " + proposalId + ". Awaiting approval.", DialogueStyle.OutputMode.CHAT);
+                        var validation = patchValidator.validate(proposal.getDiff());
+                        proposalRegistry.submit(proposal, validation.referencedFiles(), validation.message());
+                        dialogue.say("Proposal created with ID: " + proposal.getId() + ". Awaiting approval.", DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("research ")) {
                         String topic = input.substring("research ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
@@ -526,6 +598,7 @@ public final class TarsCli implements Runnable {
         dialogue.say("  dev-propose-fix   — Build a fix proposal from generated test", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  propose <topic>   — Create a pending proposal from structured Actor output", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  research <topic>  — Return deterministic JSON research proposal", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  codex <topic>     — Generate diff-only codex proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  reject <id>       — Reject a proposal", DialogueStyle.OutputMode.CHAT);
