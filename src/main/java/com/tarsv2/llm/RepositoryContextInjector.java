@@ -19,6 +19,7 @@ final class RepositoryContextInjector {
     private static final Logger log = LoggerFactory.getLogger(RepositoryContextInjector.class);
     private static final Path SOURCE_ROOT = Paths.get("src/main/java");
     private static final Path INTENT_SOURCE_ROOT = Paths.get("src/main/java/com/tarsv2/openclaw");
+    private static final String SOURCE_ROOT_SLASH = "src/main/java";
     private static final Pattern TYPE_PATTERN = Pattern.compile(
             "^\\s*(public|protected|private)?\\s*(abstract\\s+|final\\s+)?(class|interface|record|enum)\\s+([A-Za-z0-9_]+).*$"
     );
@@ -47,7 +48,7 @@ final class RepositoryContextInjector {
         String block = "---\nREPOSITORY CONTEXT:\n" + extracted + "\n---";
         String injectedPrompt = block + "\n\n" + prompt;
         List<String> selected = sourceFiles.stream()
-                .map(path -> SOURCE_ROOT.relativize(path).toString())
+                .map(this::toRepositoryPath)
                 .toList();
         return new InjectionResult(true, selected, injectedPrompt, block, "intent");
     }
@@ -147,7 +148,7 @@ final class RepositoryContextInjector {
             return "";
         }
 
-        String relativePath = SOURCE_ROOT.relativize(path).toString();
+        String relativePath = toRepositoryPath(path);
         String fields = publicFields.isEmpty() ? "- None" : publicFields.stream().map(v -> "- " + v).collect(java.util.stream.Collectors.joining("\n"));
         String methods = publicMethods.isEmpty() ? "- None" : publicMethods.stream().map(v -> "- " + v).collect(java.util.stream.Collectors.joining("\n"));
 
@@ -155,6 +156,11 @@ final class RepositoryContextInjector {
                 + "Class: " + className + "\n"
                 + "Public fields:\n" + fields + "\n"
                 + "Public methods:\n" + methods;
+    }
+
+    private String toRepositoryPath(Path path) {
+        String relativePath = SOURCE_ROOT.relativize(path).toString().replace('\\', '/');
+        return SOURCE_ROOT_SLASH + "/" + relativePath;
     }
 
     record InjectionResult(
