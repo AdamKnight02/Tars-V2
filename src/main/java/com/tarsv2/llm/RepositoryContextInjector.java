@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,21 +38,22 @@ final class RepositoryContextInjector {
 
         List<Path> sourceFiles = loadIntentSourceFiles();
         if (sourceFiles.isEmpty()) {
-            String noneFound = prompt + "\n\nREPOSITORY CONTEXT: None found.";
-            return new InjectionResult(true, List.of(), noneFound, "REPOSITORY CONTEXT: None found.", "intent");
+            String block = "REPOSITORY CONTEXT: None found.";
+            String injectedPrompt = block + "\n\n" + prompt;
+            return new InjectionResult(true, List.of(), injectedPrompt, block, "intent");
         }
 
         String extracted = buildExtractedContent(sourceFiles);
         String block = "---\nREPOSITORY CONTEXT:\n" + extracted + "\n---";
-        String appendedPrompt = prompt + "\n\n" + block;
+        String injectedPrompt = block + "\n\n" + prompt;
         List<String> selected = sourceFiles.stream()
                 .map(path -> SOURCE_ROOT.relativize(path).toString())
                 .toList();
-        return new InjectionResult(true, selected, appendedPrompt, block, "intent");
+        return new InjectionResult(true, selected, injectedPrompt, block, "intent");
     }
 
     private boolean isIntentTopic(String topic) {
-        return topic != null && topic.toLowerCase(Locale.ROOT).contains("intent");
+        return topic != null && topic.toLowerCase().contains("intent");
     }
 
     private List<Path> loadIntentSourceFiles() {
