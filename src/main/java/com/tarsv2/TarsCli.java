@@ -19,7 +19,6 @@ import com.tarsv2.podman.PodmanController;
 import com.tarsv2.sandbox.GitStagingService;
 import com.tarsv2.sandbox.JGitSandboxService;
 import com.tarsv2.sandbox.SandboxEnvironment;
-import com.tarsv2.security.AuthenticationConfig;
 import com.tarsv2.security.SecretManager;
 import com.tarsv2.sudo.SudoManager;
 import com.tarsv2.task.DepopScrapingTask;
@@ -244,8 +243,7 @@ public final class TarsCli implements Runnable {
         }
 
         // ── Web UI ──────────────────────────────────────────────
-        AuthenticationConfig authConfig = AuthenticationConfig.fromEnvironment();
-        ProposalWebServer webServer = new ProposalWebServer(approvalGate, authConfig, dialogue, webPort);
+        ProposalWebServer webServer = new ProposalWebServer(approvalGate, dialogue, webPort);
         try {
             webServer.start();
         } catch (Exception e) {
