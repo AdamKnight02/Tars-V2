@@ -64,7 +64,8 @@ import java.util.Set;
         name = "tars",
         mixinStandardHelpOptions = true,
         version = "TARS v2 0.1.0-SNAPSHOT",
-        description = "Human-approved, self-improving autonomous agent with personality."
+        description = "Human-approved, self-improving autonomous agent with personality.",
+        subcommands = {CodexCommand.class}
 )
 public final class TarsCli implements Runnable {
 
@@ -104,12 +105,6 @@ public final class TarsCli implements Runnable {
     @Option(names = {"--metrics-dir"}, description = "Directory for persistent metrics",
             defaultValue = "/tmp/tars-metrics")
     private String metricsDir;
-
-    @Option(names = {"--file"}, description = "Target file path for Codex diff generation")
-    private String targetFile;
-
-    @Option(names = {"--task"}, description = "Task prompt for Codex diff generation")
-    private String task;
 
     /**
      * Main entry point.
@@ -269,19 +264,6 @@ public final class TarsCli implements Runnable {
         } catch (Exception e) {
             log.warn("Web UI failed to start on port {}: {}", webPort, e.getMessage());
             dialogue.say("Web UI unavailable — CLI approval still works.", DialogueStyle.OutputMode.CHAT);
-        }
-
-        if (targetFile != null || task != null) {
-            if (targetFile == null || targetFile.isBlank()) {
-                System.out.println("[codex] Error: --file is required when using --task.");
-                return;
-            }
-            if (task == null || task.isBlank()) {
-                System.out.println("[codex] Error: --task is required when using --file.");
-                return;
-            }
-            runCodexDiffMode(codexOrchestrator);
-            return;
         }
 
         // ── Interactive Loop ─────────────────────────────────────
@@ -541,35 +523,6 @@ public final class TarsCli implements Runnable {
                                 },
                                 () -> dialogue.say("Unknown agent: " + agentName + ". Try 'agents' to see available agents.", DialogueStyle.OutputMode.CHAT)
                         );
-                    } else if (input.startsWith("codex ")) {
-                        String topic = input.substring("codex ".length()).trim();
-                        if (targetFile == null || targetFile.isBlank()) {
-                            System.out.println("[codex] Friendly error: missing --file argument. Run with --file <path> --task \"<task>\".");
-                            continue;
-                        }
-                        try {
-                            String diff = codexOrchestrator.generateDiffOnly(targetFile, topic);
-                            log.info("Codex raw diff:\n{}", diff);
-                            PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
-                            log.info("Codex validation result: {}", validationResult.message());
-                            PatchProposal proposal = new PatchProposal(
-                                    java.util.UUID.randomUUID(),
-                                    diff,
-                                    topic,
-                                    targetFile,
-                                    PatchProposal.Status.PENDING
-                            );
-                            proposalRegistry.submit(proposal, validationResult.referencedFiles(), validationResult.message());
-                            if (!validationResult.valid()) {
-                                proposalRegistry.updateStatus(proposal.getId(), PatchProposal.Status.FAILED, validationResult.message());
-                                System.out.println("[codex] Proposal rejected by validator: " + validationResult.message());
-                                continue;
-                            }
-                            System.out.println(diff);
-                            System.out.println("[codex] Proposal created: " + proposal.getId());
-                        } catch (IllegalArgumentException e) {
-                            System.out.println("[codex] Friendly error: " + e.getMessage());
-                        }
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
@@ -608,11 +561,25 @@ public final class TarsCli implements Runnable {
         }
     }
 
-
-    private void runCodexDiffMode(CodexOrchestrator codexOrchestrator) {
+    void runCodexDiffMode(CodexOrchestrator codexOrchestrator, String targetFilePath, String taskInstruction) {
+        if (targetFilePath == null || targetFilePath.isBlank() || taskInstruction == null || taskInstruction.isBlank()) {
+            System.out.println("[codex] Friendly error: missing --file or --task argument.");
+            return;
+        }
         try {
-            String diff = codexOrchestrator.generateDiffOnly(targetFile, task);
+            String diff = codexOrchestrator.generateDiffOnly(targetFilePath, taskInstruction);
             System.out.println(diff);
+        } catch (Exception e) {
+            System.out.println("[codex] Friendly error: " + e.getMessage());
+        }
+    }
+
+    void executeCodex(String targetFilePath, String taskInstruction) {
+        try {
+            String ollamaEndpoint = buildOllamaGenerateEndpoint(ollamaUrl);
+            LlmClient actor = new LlmClient(LlmRole.ACTOR, ollamaEndpoint, actorModel, null);
+            CodexOrchestrator codexOrchestrator = new CodexOrchestrator(actor);
+            runCodexDiffMode(codexOrchestrator, targetFilePath, taskInstruction);
         } catch (Exception e) {
             System.out.println("[codex] Friendly error: " + e.getMessage());
         }
@@ -635,7 +602,6 @@ public final class TarsCli implements Runnable {
         dialogue.say("  dev-propose-fix   — Build a fix proposal from generated test", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  propose <topic>   — Create a pending proposal from structured Actor output", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  research <topic>  — Return deterministic JSON research proposal", DialogueStyle.OutputMode.SYSTEM);
-        dialogue.say("  codex <topic>     — Generate diff-only codex proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  reject <id>       — Reject a proposal", DialogueStyle.OutputMode.CHAT);
