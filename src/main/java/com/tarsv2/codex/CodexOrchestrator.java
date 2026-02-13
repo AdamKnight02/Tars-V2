@@ -1,5 +1,6 @@
 package com.tarsv2.codex;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tarsv2.llm.LlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,55 +13,55 @@ import java.util.Objects;
 public final class CodexOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final LlmClient llmClient;
     private final Path sandboxRoot;
+    private final DeterministicPatchBuilder patchBuilder;
 
     public CodexOrchestrator(LlmClient llmClient) {
-        this(llmClient, Path.of("."));
+        this(llmClient, Path.of("."), new DeterministicPatchBuilder());
     }
 
     public CodexOrchestrator(LlmClient llmClient, Path sandboxRoot) {
+        this(llmClient, sandboxRoot, new DeterministicPatchBuilder());
+    }
+
+    CodexOrchestrator(LlmClient llmClient, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
         this.llmClient = Objects.requireNonNull(llmClient);
         this.sandboxRoot = Objects.requireNonNull(sandboxRoot);
+        this.patchBuilder = Objects.requireNonNull(patchBuilder);
     }
 
-    /**
-     * Generates a unified diff for the given file path and task instruction.
-     * Reads the target file from the sandbox and injects its full contents into
-     * the prompt for deterministic diff generation against that exact file path.
-     *
-     * @param filePath relative path to the target file
-     * @param task the codex instruction describing the desired change
-     * @return raw unified diff response from the actor LLM
-     */
-    public String generateDiffOnly(String filePath, String task) {
-        String exactTargetFilePath = requireTargetFilePath(filePath);
-        if (task == null || task.isBlank()) {
-            throw new IllegalArgumentException("Task description is required for diff generation.");
-        }
-        String fileContent = readFileFromSandbox(exactTargetFilePath);
-        String prompt = buildPrompt(task, exactTargetFilePath, fileContent);
-        String rawDiff = llmClient.complete(
-                "You are a deterministic patch generator.",
+    public String generateDiffOnly(String targetFilePath, String task) {
+        String safeTargetFilePath = requireTargetFilePath(targetFilePath);
+        String safeTask = requireTask(task);
+        String originalContent = readFileFromSandbox(safeTargetFilePath);
+        String prompt = buildPrompt(safeTask, safeTargetFilePath, originalContent);
+        String structuredJson = llmClient.completeStructuredJson(
+                "You produce ONLY JSON objects describing file edits.",
                 prompt
         );
-        log.info("Raw LLM diff output:\n{}", rawDiff);
-        return rawDiff;
+
+        ChangeRequest changeRequest = parseChangeRequest(structuredJson);
+        String diff = patchBuilder.buildUnifiedDiff(safeTargetFilePath, originalContent, changeRequest);
+        log.info("Deterministic diff generated for {} ({} chars)", safeTargetFilePath, diff.length());
+        return diff;
     }
 
-    /**
-     * Returns the output exactly as produced by Codex mode.
-     */
-    public String extractDiff(String codexOutput) {
-        return codexOutput == null ? "" : codexOutput;
+    private ChangeRequest parseChangeRequest(String structuredJson) {
+        try {
+            return MAPPER.readValue(structuredJson, ChangeRequest.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("LLM returned invalid change JSON.", e);
+        }
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
         String exactTargetPath = requireTargetFilePath(targetFilePath);
         String contents = Objects.requireNonNull(fileContent, "fileContent must not be null");
 
-        return "You are a deterministic patch generator.\n"
+        return "You are a deterministic code change planner.\n"
                 + "Target file path:\n"
                 + exactTargetPath
                 + "\n\n"
@@ -70,15 +71,20 @@ public final class CodexOrchestrator {
                 + "Task:\n"
                 + instruction
                 + "\n\n"
-                + "Generate a valid unified diff referencing ONLY the target file path.\n"
-                + "- The diff header must be exactly:\n"
-                + "  --- a/" + exactTargetPath + "\n"
-                + "  +++ b/" + exactTargetPath + "\n"
-                + "- Do not use placeholder filenames.\n"
-                + "- Do not use names like original.txt.\n"
-                + "- Include context lines.\n"
-                + "- Do not include markdown.\n"
-                + "- Output diff only.";
+                + "Return ONLY valid JSON with this shape:\n"
+                + "{\n"
+                + "  \"action\": \"<action identifier>\",\n"
+                + "  \"locationHint\": \"<context hint>\",\n"
+                + "  \"content\": \"<inserted or replacement text>\"\n"
+                + "}\n"
+                + "Do not return markdown. Do not return a unified diff.";
+    }
+
+    private String requireTask(String task) {
+        if (task == null || task.isBlank()) {
+            throw new IllegalArgumentException("Task description is required for diff generation.");
+        }
+        return task;
     }
 
     private String requireTargetFilePath(String targetFilePath) {
@@ -89,19 +95,23 @@ public final class CodexOrchestrator {
     }
 
     private String readFileFromSandbox(String targetFilePath) {
-        if (targetFilePath == null || targetFilePath.isBlank()) {
-            throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
+        Path filePath = sandboxRoot.resolve(targetFilePath).normalize();
+        Path normalizedRoot = sandboxRoot.toAbsolutePath().normalize();
+        Path absoluteFile = filePath.toAbsolutePath().normalize();
+
+        if (!absoluteFile.startsWith(normalizedRoot)) {
+            throw new IllegalArgumentException("Target file path escapes sandbox root.");
         }
-        Path filePath = sandboxRoot.resolve(targetFilePath);
+
         if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
-            throw new IllegalArgumentException("Target file not found in sandbox: " + filePath);
+            throw new IllegalArgumentException("Target file not found in sandbox: " + targetFilePath);
         }
         try {
             String content = Files.readString(filePath);
             log.info("Read {} bytes from sandbox file: {}", content.length(), targetFilePath);
             return content;
         } catch (IOException e) {
-            throw new IllegalStateException("Failed to read sandbox file: " + filePath, e);
+            throw new IllegalStateException("Failed to read sandbox file: " + targetFilePath, e);
         }
     }
 
