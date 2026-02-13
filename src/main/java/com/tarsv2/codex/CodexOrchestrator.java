@@ -30,17 +30,17 @@ public final class CodexOrchestrator {
      * Reads the target file from the sandbox and injects its full contents into
      * the prompt for deterministic diff generation against that exact file path.
      *
-     * @param filePath relative path to the target file
-     * @param task the codex instruction describing the desired change
+     * @param targetFilePath relative path to the target file
+     * @param taskInstruction the codex instruction describing the desired change
      * @return raw unified diff response from the actor LLM
      */
-    public String generateDiffOnly(String filePath, String task) {
-        String exactTargetFilePath = requireTargetFilePath(filePath);
-        if (task == null || task.isBlank()) {
+    public String generateDiffOnly(String targetFilePath, String taskInstruction) {
+        String exactTargetFilePath = requireTargetFilePath(targetFilePath);
+        if (taskInstruction == null || taskInstruction.isBlank()) {
             throw new IllegalArgumentException("Task description is required for diff generation.");
         }
         String fileContent = readFileFromSandbox(exactTargetFilePath);
-        String prompt = buildPrompt(task, exactTargetFilePath, fileContent);
+        String prompt = buildPrompt(taskInstruction, exactTargetFilePath, fileContent);
         String rawDiff = llmClient.complete(
                 "You are a deterministic patch generator.",
                 prompt
