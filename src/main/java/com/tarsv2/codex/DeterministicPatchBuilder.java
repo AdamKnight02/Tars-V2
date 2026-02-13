@@ -14,12 +14,13 @@ import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 public final class DeterministicPatchBuilder {
 
-    public String buildUnifiedDiff(String targetFilePath, String originalContent, ChangeRequest request) {
+    public String buildUnifiedDiff(String targetFilePath, String originalContent, ChangeRequest request) throws IOException {
         String path = requirePath(targetFilePath);
         String oldContent = Objects.requireNonNull(originalContent, "originalContent must not be null");
         ChangeRequest safeRequest = Objects.requireNonNull(request, "change request is required");
@@ -79,7 +80,7 @@ public final class DeterministicPatchBuilder {
         return original.substring(0, insertionPoint) + content + original.substring(insertionPoint);
     }
 
-    private String formatDiff(String path, String oldContent, String newContent) {
+    private String formatDiff(String path, String oldContent, String newContent) throws IOException {
         InMemoryRepository repo = new InMemoryRepository.Builder()
                 .setRepositoryDescription(new DfsRepositoryDescription("deterministic-diff"))
                 .build();
