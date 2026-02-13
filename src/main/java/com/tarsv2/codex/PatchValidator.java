@@ -8,25 +8,83 @@ import java.util.regex.Pattern;
 public final class PatchValidator {
 
     private static final String ALLOWED_PREFIX = "src/main/java/com/tarsv2/";
-    private static final Pattern DIFF_PATH = Pattern.compile("^diff --git a/(.+) b/(.+)$");
+    private static final Pattern DIFF_GIT_PATH = Pattern.compile("^diff --git a/(.+) b/(.+)$");
+    private static final Pattern MINUS_HEADER = Pattern.compile("^--- a/(.+)$");
+    private static final Pattern PLUS_HEADER = Pattern.compile("^\\+\\+\\+ b/(.+)$");
+    private static final Pattern HUNK_HEADER = Pattern.compile(
+            "^@@ -\\d+(?:,\\d+)? \\+\\d+(?:,\\d+)? @@");
 
     public ValidationResult validate(String diff) {
         if (diff == null || diff.isBlank()) {
             return ValidationResult.failed("Empty diff", List.of());
         }
-        if (!diff.contains("diff --git ")) {
-            return ValidationResult.failed("Diff is not unified format", List.of());
-        }
+
+        String[] lines = diff.split("\\R");
+
+        // Check for required --- / +++ headers
+        boolean hasMinusHeader = false;
+        boolean hasPlusHeader = false;
+        boolean hasHunkHeader = false;
+        boolean hasContextLine = false;
 
         List<String> files = new ArrayList<>();
-        for (String line : diff.split("\\R")) {
-            Matcher matcher = DIFF_PATH.matcher(line);
-            if (!matcher.matches()) {
-                continue;
-            }
-            String file = matcher.group(2);
-            files.add(file);
 
+        for (String line : lines) {
+            // Extract file paths from diff --git (if present)
+            Matcher gitMatcher = DIFF_GIT_PATH.matcher(line);
+            if (gitMatcher.matches()) {
+                String file = gitMatcher.group(2);
+                if (!files.contains(file)) {
+                    files.add(file);
+                }
+            }
+
+            // Extract file paths from --- a/ header
+            Matcher minusMatcher = MINUS_HEADER.matcher(line);
+            if (minusMatcher.matches()) {
+                hasMinusHeader = true;
+            }
+
+            // Extract file paths from +++ b/ header
+            Matcher plusMatcher = PLUS_HEADER.matcher(line);
+            if (plusMatcher.matches()) {
+                hasPlusHeader = true;
+                String file = plusMatcher.group(1);
+                if (!files.contains(file)) {
+                    files.add(file);
+                }
+            }
+
+            if (HUNK_HEADER.matcher(line).find()) {
+                hasHunkHeader = true;
+            }
+
+            if (line.startsWith(" ")) {
+                hasContextLine = true;
+            }
+        }
+
+        // Structural validation: require --- / +++ headers
+        if (!hasMinusHeader || !hasPlusHeader) {
+            return ValidationResult.failed("Diff is not unified format — missing --- a/ and +++ b/ headers", files);
+        }
+
+        // Structural validation: require @@ hunk headers
+        if (!hasHunkHeader) {
+            return ValidationResult.failed("Diff has no @@ hunk headers", files);
+        }
+
+        // Structural validation: require context lines
+        if (!hasContextLine) {
+            return ValidationResult.failed("Diff has no context lines", files);
+        }
+
+        if (files.isEmpty()) {
+            return ValidationResult.failed("No file changes found in diff", files);
+        }
+
+        // Security policy checks on referenced files
+        for (String file : files) {
             if (!file.startsWith(ALLOWED_PREFIX)) {
                 return ValidationResult.failed("Patch modifies disallowed path: " + file, files);
             }
@@ -42,9 +100,6 @@ public final class PatchValidator {
             }
         }
 
-        if (files.isEmpty()) {
-            return ValidationResult.failed("No file changes found in diff", files);
-        }
         return ValidationResult.passed(files);
     }
 

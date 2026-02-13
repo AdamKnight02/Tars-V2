@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Extracts and validates unified diff content from raw LLM output.
@@ -16,6 +17,10 @@ import java.util.List;
 public final class DiffParser {
 
     private static final Logger log = LoggerFactory.getLogger(DiffParser.class);
+
+    /** Matches a valid unified diff hunk header: @@ -line,count +line,count @@ */
+    private static final Pattern HUNK_HEADER = Pattern.compile(
+            "^@@ -\\d+(?:,\\d+)? \\+\\d+(?:,\\d+)? @@");
 
     private DiffParser() {}
 
@@ -79,5 +84,43 @@ public final class DiffParser {
             }
         }
         return hasMinus && hasPlus;
+    }
+
+    /**
+     * Validates that the diff contains at least one valid @@ hunk header
+     * with proper line number format: {@code @@ -line,count +line,count @@}.
+     *
+     * @param diff the diff string to validate
+     * @return true if the diff contains at least one valid hunk header
+     */
+    public static boolean hasHunkHeaders(String diff) {
+        if (diff == null || diff.isBlank()) {
+            return false;
+        }
+        for (String line : diff.split("\\R")) {
+            if (HUNK_HEADER.matcher(line).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Validates that the diff contains at least one context line (space-prefixed).
+     * A proper unified diff must include context around changes.
+     *
+     * @param diff the diff string to validate
+     * @return true if the diff contains at least one context line
+     */
+    public static boolean hasContextLines(String diff) {
+        if (diff == null || diff.isBlank()) {
+            return false;
+        }
+        for (String line : diff.split("\\R")) {
+            if (line.startsWith(" ")) {
+                return true;
+            }
+        }
+        return false;
     }
 }
