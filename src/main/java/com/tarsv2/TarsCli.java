@@ -38,6 +38,7 @@ import picocli.CommandLine.Option;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
@@ -571,6 +572,9 @@ public final class TarsCli implements Runnable {
                             System.out.println("[codex] Proposal created: " + proposal.getId());
                         } catch (IllegalArgumentException e) {
                             System.out.println("[codex] Friendly error: " + e.getMessage());
+                        } catch (IOException e) {
+                            System.out.println("[codex] Sorry, something went wrong while generating the diff.");
+                            log.error("Codex diff generation failed", e);
                         }
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
