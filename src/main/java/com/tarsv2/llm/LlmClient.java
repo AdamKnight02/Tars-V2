@@ -93,7 +93,7 @@ public final class LlmClient {
         log.debug("[{}] System: {}", role, sanitizedSystem);
         log.debug("[{}] User: {}", role, sanitizedUser);
 
-        String requestBody = buildRequestBody(sanitizedSystem, sanitizedUser);
+        String requestBody = buildRequestBody(sanitizedSystem, sanitizedUser, false);
 
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
@@ -121,13 +121,47 @@ public final class LlmClient {
         return String.format("[%s] ERROR: Unexpected retry loop exit", role);
     }
 
-    private String buildRequestBody(String systemPrompt, String userPrompt) {
+    public String completeStructuredJson(String systemPrompt, String userPrompt) {
+        log.info("[{}] Sending structured JSON prompt to {} at {}", role, role.getModelFamily(), endpoint);
+
+        String fullSystemPrompt = HARD_SYSTEM_INSTRUCTIONS + "\n\n" + systemPrompt;
+        String sanitizedSystem = PromptSanitizer.sanitize(fullSystemPrompt);
+        String sanitizedUser = PromptSanitizer.sanitize(userPrompt);
+
+        String requestBody = buildRequestBody(sanitizedSystem, sanitizedUser, true);
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                String response = executeRequest(requestBody);
+                log.info("[{}] Received structured JSON response ({} chars)", role, response.length());
+                return response;
+            } catch (IOException e) {
+                log.warn("[{}] Attempt {}/{} failed: {}", role, attempt, MAX_RETRIES, e.getMessage());
+                if (attempt == MAX_RETRIES) {
+                    return String.format("[%s] ERROR: LLM endpoint unreachable after %d attempts — %s",
+                            role, MAX_RETRIES, e.getMessage());
+                }
+                try {
+                    long backoffMs = (long) Math.pow(2, attempt) * 1000;
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return String.format("[%s] ERROR: Interrupted during retry backoff", role);
+                }
+            }
+        }
+        return String.format("[%s] ERROR: Unexpected retry loop exit", role);
+    }
+
+    private String buildRequestBody(String systemPrompt, String userPrompt, boolean jsonMode) {
         try {
             ObjectNode root = mapper.createObjectNode();
 
             root.put("model", model);
             root.put("prompt", systemPrompt + "\n\n" + userPrompt);
             root.put("stream", false);
+            if (jsonMode) {
+                root.put("format", "json");
+            }
 
             return mapper.writeValueAsString(root);
         } catch (Exception e) {

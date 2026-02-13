@@ -39,6 +39,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Paths;
 import java.util.Scanner;
 import java.util.Set;
 
@@ -548,7 +550,7 @@ public final class TarsCli implements Runnable {
                             continue;
                         }
                         try {
-                            String diff = codexOrchestrator.generateDiffOnly(targetFile, topic);
+                            String diff = codexOrchestrator.generateDiffOnly(validatedCodexPath(targetFile), validatedTask(topic));
                             log.info("Codex raw diff:\n{}", diff);
                             PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
                             log.info("Codex validation result: {}", validationResult.message());
@@ -611,11 +613,38 @@ public final class TarsCli implements Runnable {
 
     private void runCodexDiffMode(CodexOrchestrator codexOrchestrator) {
         try {
-            String diff = codexOrchestrator.generateDiffOnly(targetFile, task);
+            String safeFile = validatedCodexPath(targetFile);
+            String safeTask = validatedTask(task);
+            String diff = codexOrchestrator.generateDiffOnly(safeFile, safeTask);
             System.out.println(diff);
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
             System.out.println("[codex] Friendly error: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("[codex] Sorry, something went wrong while generating the diff.");
+            log.error("Codex diff mode failed", e);
         }
+    }
+
+    private String validatedCodexPath(String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            throw new IllegalArgumentException("missing --file argument. Run with --file <path> --task \"<task>\".");
+        }
+        try {
+            var normalized = Paths.get(filePath).normalize();
+            if (normalized.isAbsolute() || normalized.startsWith("..")) {
+                throw new IllegalArgumentException("--file must be a relative path inside the repository.");
+            }
+            return normalized.toString().replace("\\", "/");
+        } catch (InvalidPathException ex) {
+            throw new IllegalArgumentException("--file value is not a valid path.");
+        }
+    }
+
+    private String validatedTask(String taskValue) {
+        if (taskValue == null || taskValue.isBlank()) {
+            throw new IllegalArgumentException("missing --task argument. Run with --task \"<task>\".");
+        }
+        return taskValue.trim();
     }
 
     private void printHelp(DialogueStyle dialogue) {
