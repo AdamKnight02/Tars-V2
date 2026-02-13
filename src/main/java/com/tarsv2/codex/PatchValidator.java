@@ -1,5 +1,8 @@
 package com.tarsv2.codex;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -7,6 +10,8 @@ import java.util.regex.Pattern;
 
 public final class PatchValidator {
 
+    private static final Logger log = LoggerFactory.getLogger(PatchValidator.class);
+    private static final String REQUIRED_PREFIX = "--- a/src/";
     private static final String ALLOWED_PREFIX = "src/main/java/com/tarsv2/";
     private static final Pattern DIFF_GIT_PATH = Pattern.compile("^diff --git a/(.+) b/(.+)$");
     private static final Pattern MINUS_HEADER = Pattern.compile("^--- a/(.+)$");
@@ -15,13 +20,23 @@ public final class PatchValidator {
             "^@@ -\\d+(?:,\\d+)? \\+\\d+(?:,\\d+)? @@");
 
     public ValidationResult validate(String diff) {
+        log.info("Raw diff for validation:\n{}", diff);
+
+        ValidationResult result;
         if (diff == null || diff.isBlank()) {
-            return ValidationResult.failed("Empty diff", List.of());
+            result = ValidationResult.failed("Empty diff", List.of());
+            log.info("Validation result: {}", result.message());
+            return result;
+        }
+
+        if (!diff.startsWith(REQUIRED_PREFIX)) {
+            result = ValidationResult.failed("Diff must start with '--- a/src/'", List.of());
+            log.info("Validation result: {}", result.message());
+            return result;
         }
 
         String[] lines = diff.split("\\R");
 
-        // Check for required --- / +++ headers
         boolean hasMinusHeader = false;
         boolean hasPlusHeader = false;
         boolean hasHunkHeader = false;
@@ -30,7 +45,6 @@ public final class PatchValidator {
         List<String> files = new ArrayList<>();
 
         for (String line : lines) {
-            // Extract file paths from diff --git (if present)
             Matcher gitMatcher = DIFF_GIT_PATH.matcher(line);
             if (gitMatcher.matches()) {
                 String file = gitMatcher.group(2);
@@ -39,13 +53,11 @@ public final class PatchValidator {
                 }
             }
 
-            // Extract file paths from --- a/ header
             Matcher minusMatcher = MINUS_HEADER.matcher(line);
             if (minusMatcher.matches()) {
                 hasMinusHeader = true;
             }
 
-            // Extract file paths from +++ b/ header
             Matcher plusMatcher = PLUS_HEADER.matcher(line);
             if (plusMatcher.matches()) {
                 hasPlusHeader = true;
@@ -64,43 +76,57 @@ public final class PatchValidator {
             }
         }
 
-        // Structural validation: require --- / +++ headers
         if (!hasMinusHeader || !hasPlusHeader) {
-            return ValidationResult.failed("Diff is not unified format — missing --- a/ and +++ b/ headers", files);
+            result = ValidationResult.failed("Diff is not unified format — missing --- a/ and +++ b/ headers", files);
+            log.info("Validation result: {}", result.message());
+            return result;
         }
 
-        // Structural validation: require @@ hunk headers
         if (!hasHunkHeader) {
-            return ValidationResult.failed("Diff has no @@ hunk headers", files);
+            result = ValidationResult.failed("Diff has no @@ hunk headers", files);
+            log.info("Validation result: {}", result.message());
+            return result;
         }
 
-        // Structural validation: require context lines
         if (!hasContextLine) {
-            return ValidationResult.failed("Diff has no context lines", files);
+            result = ValidationResult.failed("Diff has no context lines", files);
+            log.info("Validation result: {}", result.message());
+            return result;
         }
 
         if (files.isEmpty()) {
-            return ValidationResult.failed("No file changes found in diff", files);
+            result = ValidationResult.failed("No file changes found in diff", files);
+            log.info("Validation result: {}", result.message());
+            return result;
         }
 
-        // Security policy checks on referenced files
         for (String file : files) {
             if (!file.startsWith(ALLOWED_PREFIX)) {
-                return ValidationResult.failed("Patch modifies disallowed path: " + file, files);
+                result = ValidationResult.failed("Patch modifies disallowed path: " + file, files);
+                log.info("Validation result: {}", result.message());
+                return result;
             }
             if (file.equals("pom.xml") || file.contains("build.gradle") || file.contains("settings.gradle")) {
-                return ValidationResult.failed("Build system modifications are blocked: " + file, files);
+                result = ValidationResult.failed("Build system modifications are blocked: " + file, files);
+                log.info("Validation result: {}", result.message());
+                return result;
             }
             if (file.endsWith("ProposalRegistry.java")) {
-                return ValidationResult.failed("ProposalRegistry self-modification blocked", files);
+                result = ValidationResult.failed("ProposalRegistry self-modification blocked", files);
+                log.info("Validation result: {}", result.message());
+                return result;
             }
             String lowered = file.toLowerCase();
             if (lowered.contains("authentication") || lowered.contains("sandbox") || lowered.contains("kill")) {
-                return ValidationResult.failed("Security-sensitive path is blocked: " + file, files);
+                result = ValidationResult.failed("Security-sensitive path is blocked: " + file, files);
+                log.info("Validation result: {}", result.message());
+                return result;
             }
         }
 
-        return ValidationResult.passed(files);
+        result = ValidationResult.passed(files);
+        log.info("Validation result: {}", result.message());
+        return result;
     }
 
     public record ValidationResult(boolean valid, String message, List<String> referencedFiles) {

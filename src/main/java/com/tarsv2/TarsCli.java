@@ -237,7 +237,7 @@ public final class TarsCli implements Runnable {
         ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
                 llmService, chatConfig, contextSummarizer, contextBudget);
         ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(llmService);
-        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(llmService);
+        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(actor);
         PatchValidator patchValidator = new PatchValidator();
         SandboxGitService sandboxGitService = new SandboxGitService(Path.of("."));
 
@@ -526,7 +526,9 @@ public final class TarsCli implements Runnable {
                     } else if (input.startsWith("codex ")) {
                         String topic = input.substring("codex ".length()).trim();
                         String diff = codexOrchestrator.generateDiffOnly(topic);
+                        log.info("Codex raw diff:\n{}", diff);
                         PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
+                        log.info("Codex validation result: {}", validationResult.message());
                         PatchProposal proposal = new PatchProposal(
                                 java.util.UUID.randomUUID(),
                                 diff,
@@ -537,11 +539,11 @@ public final class TarsCli implements Runnable {
                         proposalRegistry.submit(proposal, validationResult.referencedFiles(), validationResult.message());
                         if (!validationResult.valid()) {
                             proposalRegistry.updateStatus(proposal.getId(), PatchProposal.Status.FAILED, validationResult.message());
-                            dialogue.say("Codex proposal rejected by validator: " + validationResult.message(), DialogueStyle.OutputMode.CHAT);
+                            System.out.println("[codex] Proposal rejected by validator: " + validationResult.message());
                             continue;
                         }
                         System.out.println(diff);
-                        dialogue.say("Codex proposal created: " + proposal.getId(), DialogueStyle.OutputMode.CHAT);
+                        System.out.println("[codex] Proposal created: " + proposal.getId());
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
