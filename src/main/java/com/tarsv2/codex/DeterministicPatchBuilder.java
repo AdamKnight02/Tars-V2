@@ -8,6 +8,7 @@ import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectInserter;
+import org.eclipse.jgit.internal.storage.dfs.DfsRepositoryDescription;
 import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
@@ -79,7 +80,9 @@ public final class DeterministicPatchBuilder {
     }
 
     private String formatDiff(String path, String oldContent, String newContent) {
-        InMemoryRepository repo = new InMemoryRepository.Builder().setRepositoryDescription("deterministic-diff").build();
+        InMemoryRepository repo = new InMemoryRepository.Builder()
+                .setRepositoryDescription(new DfsRepositoryDescription("deterministic-diff"))
+                .build();
         try (ObjectInserter inserter = repo.newObjectInserter();
              ByteArrayOutputStream out = new ByteArrayOutputStream();
              DiffFormatter formatter = new DiffFormatter(out)) {
