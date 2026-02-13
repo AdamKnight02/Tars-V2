@@ -12,11 +12,6 @@ import java.util.Objects;
 public final class CodexOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
-    private static final String STRICT_OUTPUT_REQUIREMENT =
-            "\n\nSTRICT OUTPUT REQUIREMENT:\n"
-            + "- Output ONLY the unified diff — no commentary, no JSON, no explanation.\n"
-            + "- Emit a unified diff only.\n"
-            + "- The very first line must be exactly: --- a/src/...\n";
 
     private final LlmClient llmClient;
     private final Path sandboxRoot;
@@ -32,18 +27,19 @@ public final class CodexOrchestrator {
 
     /**
      * Generates a unified diff for the given instruction.
-     * If {@code targetFilePath} is provided, reads the file from the sandbox
-     * and injects its contents into the prompt for accurate diff generation.
+     * Reads the target file from the sandbox and injects its full contents into
+     * the prompt for deterministic diff generation against that exact file path.
      *
      * @param instruction  the codex instruction describing the desired change
-     * @param targetFilePath relative path to the target file (may be null)
+     * @param targetFilePath relative path to the target file
      * @return raw unified diff response from the actor LLM
      */
     public String generateDiffOnly(String instruction, String targetFilePath) {
-        String fileContent = readFileFromSandbox(targetFilePath);
-        String prompt = buildPrompt(instruction, targetFilePath, fileContent);
+        String exactTargetFilePath = requireTargetFilePath(targetFilePath);
+        String fileContent = readFileFromSandbox(exactTargetFilePath);
+        String prompt = buildPrompt(instruction, exactTargetFilePath, fileContent);
         String rawDiff = llmClient.complete(
-                "Return a unified diff only." + STRICT_OUTPUT_REQUIREMENT,
+                "You are a deterministic patch generator.",
                 prompt
         );
         log.info("Raw LLM diff output:\n{}", rawDiff);
@@ -54,7 +50,7 @@ public final class CodexOrchestrator {
      * Generates a unified diff for the given instruction without a specific target file.
      */
     public String generateDiffOnly(String instruction) {
-        return generateDiffOnly(instruction, null);
+        throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
     }
 
     /**
@@ -65,59 +61,51 @@ public final class CodexOrchestrator {
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
-        StringBuilder sb = new StringBuilder();
+        String exactTargetPath = requireTargetFilePath(targetFilePath);
+        String contents = Objects.requireNonNull(fileContent, "fileContent must not be null");
 
-        if (fileContent != null && !fileContent.isEmpty()) {
-            sb.append("Below is the CURRENT content of the file to be modified.\n");
-            sb.append("Use these exact contents to produce correct line numbers in your diff.\n\n");
-            sb.append("-------------------\n");
-            sb.append("CURRENT FILE CONTENT (").append(targetFilePath).append("):\n");
-            sb.append(numberLines(fileContent)).append("\n");
-            sb.append("-------------------\n\n");
-        }
-
-        sb.append("-------------------\n");
-        sb.append("INSTRUCTION:\n");
-        sb.append(instruction).append("\n");
-        sb.append("-------------------\n");
-
-        if (targetFilePath != null) {
-            sb.append("\nTarget file path: ").append(targetFilePath).append("\n");
-        }
-
-        sb.append(STRICT_OUTPUT_REQUIREMENT);
-
-        return sb.toString();
+        return "You are a deterministic patch generator.\n"
+                + "Target file path:\n"
+                + exactTargetPath
+                + "\n\n"
+                + "Current file contents:\n"
+                + contents
+                + "\n\n"
+                + "Task:\n"
+                + instruction
+                + "\n\n"
+                + "Generate a valid unified diff referencing ONLY the target file path.\n"
+                + "- The diff header must be exactly:\n"
+                + "  --- a/" + exactTargetPath + "\n"
+                + "  +++ b/" + exactTargetPath + "\n"
+                + "- Do not use placeholder filenames.\n"
+                + "- Do not use names like original.txt.\n"
+                + "- Include context lines.\n"
+                + "- Do not include markdown.\n"
+                + "- Output diff only.";
     }
 
-    /**
-     * Adds line numbers to file content so the LLM can reference exact lines.
-     */
-    private String numberLines(String content) {
-        String[] lines = content.split("\\R", -1);
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            sb.append(String.format("%4d | %s\n", i + 1, lines[i]));
+    private String requireTargetFilePath(String targetFilePath) {
+        if (targetFilePath == null || targetFilePath.isBlank()) {
+            throw new IllegalArgumentException("Target file path is required.");
         }
-        return sb.toString();
+        return targetFilePath;
     }
 
     private String readFileFromSandbox(String targetFilePath) {
         if (targetFilePath == null || targetFilePath.isBlank()) {
-            return null;
+            throw new IllegalArgumentException("Target file path is required.");
         }
         Path filePath = sandboxRoot.resolve(targetFilePath);
         if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
-            log.warn("Target file not found in sandbox: {}", filePath);
-            return null;
+            throw new IllegalArgumentException("Target file not found in sandbox: " + filePath);
         }
         try {
             String content = Files.readString(filePath);
             log.info("Read {} bytes from sandbox file: {}", content.length(), targetFilePath);
             return content;
         } catch (IOException e) {
-            log.error("Failed to read sandbox file: {}", filePath, e);
-            return null;
+            throw new IllegalStateException("Failed to read sandbox file: " + filePath, e);
         }
     }
 
