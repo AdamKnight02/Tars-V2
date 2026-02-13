@@ -1,9 +1,6 @@
 package com.tarsv2.codex;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tarsv2.llm.LlmRole;
-import com.tarsv2.llm.LlmService;
+import com.tarsv2.llm.LlmClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,32 +12,21 @@ import java.util.Objects;
 public final class CodexOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final double QUALITY_THRESHOLD = 0.80;
-    private static final int MAX_REVISIONS = 2;
-
     private static final String STRICT_OUTPUT_REQUIREMENT =
             "\n\nSTRICT OUTPUT REQUIREMENT:\n"
-            + "- Produce a valid unified diff.\n"
-            + "- Use correct line numbers based on the provided file.\n"
-            + "- Include at least 3 lines of context around each change.\n"
-            + "- Do NOT fabricate @@ -0,0 blocks.\n"
             + "- Output ONLY the unified diff — no commentary, no JSON, no explanation.\n"
-            + "- Do NOT wrap output in BEGIN_DIFF/END_DIFF.\n"
-            + "- The diff MUST begin with:\n"
-            + "  --- a/<path>\n"
-            + "  +++ b/<path>\n"
-            + "  @@ -<line>,<count> +<line>,<count> @@\n";
+            + "- Emit a unified diff only.\n"
+            + "- The very first line must be exactly: --- a/src/...\n";
 
-    private final LlmService llmService;
+    private final LlmClient llmClient;
     private final Path sandboxRoot;
 
-    public CodexOrchestrator(LlmService llmService) {
-        this(llmService, Path.of("."));
+    public CodexOrchestrator(LlmClient llmClient) {
+        this(llmClient, Path.of("."));
     }
 
-    public CodexOrchestrator(LlmService llmService, Path sandboxRoot) {
-        this.llmService = Objects.requireNonNull(llmService);
+    public CodexOrchestrator(LlmClient llmClient, Path sandboxRoot) {
+        this.llmClient = Objects.requireNonNull(llmClient);
         this.sandboxRoot = Objects.requireNonNull(sandboxRoot);
     }
 
@@ -51,72 +37,17 @@ public final class CodexOrchestrator {
      *
      * @param instruction  the codex instruction describing the desired change
      * @param targetFilePath relative path to the target file (may be null)
-     * @return validated unified diff string, or empty string on failure
+     * @return raw unified diff response from the actor LLM
      */
     public String generateDiffOnly(String instruction, String targetFilePath) {
         String fileContent = readFileFromSandbox(targetFilePath);
         String prompt = buildPrompt(instruction, targetFilePath, fileContent);
-
-        for (int i = 0; i <= MAX_REVISIONS; i++) {
-            String actor = llmService.generate(
-                    LlmRole.ACTOR,
-                    "Return a valid unified diff only. No wrappers, no commentary."
-                            + STRICT_OUTPUT_REQUIREMENT,
-                    prompt
-            );
-
-            log.info("Raw LLM diff output:\n{}", actor);
-
-            // Strip any BEGIN_DIFF/END_DIFF wrappers the LLM might still produce
-            String unwrapped = stripEnvelopeWrappers(actor);
-
-            // Extract and validate diff lines
-            String cleaned = DiffParser.extractDiffLines(unwrapped);
-            if (!DiffParser.hasValidDiffHeader(cleaned)) {
-                log.warn("Diff has no valid header after extraction, rejecting (attempt {})", i + 1);
-                prompt = "Previous diff was invalid — missing --- a/ and +++ b/ headers. "
-                        + "Return a valid unified diff only."
-                        + STRICT_OUTPUT_REQUIREMENT;
-                if (fileContent != null && !fileContent.isEmpty()) {
-                    prompt += "\n\nCURRENT FILE CONTENT:\n" + fileContent;
-                }
-                continue;
-            }
-
-            if (!DiffParser.hasHunkHeaders(cleaned)) {
-                log.warn("Diff has no @@ hunk headers, rejecting (attempt {})", i + 1);
-                prompt = "Previous diff was invalid — missing @@ hunk headers with line numbers. "
-                        + "Return a valid unified diff only."
-                        + STRICT_OUTPUT_REQUIREMENT;
-                if (fileContent != null && !fileContent.isEmpty()) {
-                    prompt += "\n\nCURRENT FILE CONTENT:\n" + fileContent;
-                }
-                continue;
-            }
-
-            if (!DiffParser.hasContextLines(cleaned)) {
-                log.warn("Diff has no context lines, rejecting (attempt {})", i + 1);
-                prompt = "Previous diff was invalid — must include at least 3 lines of context. "
-                        + "Return a valid unified diff only."
-                        + STRICT_OUTPUT_REQUIREMENT;
-                if (fileContent != null && !fileContent.isEmpty()) {
-                    prompt += "\n\nCURRENT FILE CONTENT:\n" + fileContent;
-                }
-                continue;
-            }
-
-            Reflection reflection = reflect(instruction, cleaned);
-            if (reflection.score() >= QUALITY_THRESHOLD) {
-                return cleaned;
-            }
-
-            prompt = "Revise diff to address critique:\n" + reflection.critique()
-                    + STRICT_OUTPUT_REQUIREMENT;
-            if (fileContent != null && !fileContent.isEmpty()) {
-                prompt += "\n\nCURRENT FILE CONTENT:\n" + fileContent;
-            }
-        }
-        return "";
+        String rawDiff = llmClient.complete(
+                "Return a unified diff only." + STRICT_OUTPUT_REQUIREMENT,
+                prompt
+        );
+        log.info("Raw LLM diff output:\n{}", rawDiff);
+        return rawDiff;
     }
 
     /**
@@ -127,15 +58,10 @@ public final class CodexOrchestrator {
     }
 
     /**
-     * Extracts the diff content from raw output.
-     * No longer expects BEGIN_DIFF/END_DIFF envelope — returns cleaned diff lines directly.
+     * Returns the output exactly as produced by Codex mode.
      */
     public String extractDiff(String codexOutput) {
-        if (codexOutput == null || codexOutput.isBlank()) {
-            return "";
-        }
-        String unwrapped = stripEnvelopeWrappers(codexOutput);
-        return DiffParser.extractDiffLines(unwrapped);
+        return codexOutput == null ? "" : codexOutput;
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
@@ -176,23 +102,6 @@ public final class CodexOrchestrator {
         return sb.toString();
     }
 
-    /**
-     * Strips BEGIN_DIFF/END_DIFF wrappers if the LLM still produces them,
-     * so downstream parsing works regardless.
-     */
-    private String stripEnvelopeWrappers(String output) {
-        if (output == null) {
-            return "";
-        }
-        String result = output;
-        int start = result.indexOf("BEGIN_DIFF");
-        int end = result.indexOf("END_DIFF");
-        if (start >= 0 && end > start) {
-            result = result.substring(start + "BEGIN_DIFF".length(), end).trim();
-        }
-        return result;
-    }
-
     private String readFileFromSandbox(String targetFilePath) {
         if (targetFilePath == null || targetFilePath.isBlank()) {
             return null;
@@ -212,23 +121,4 @@ public final class CodexOrchestrator {
         }
     }
 
-    private Reflection reflect(String instruction, String diff) {
-        String raw = llmService.generate(
-                LlmRole.REFLECTOR,
-                "Score codex diff quality and safety. Return JSON only.",
-                "Return JSON schema {\"qualityScore\": number, \"critique\": string}.\nInstruction:\n"
-                        + instruction + "\nDiff:\n" + diff
-        );
-
-        try {
-            JsonNode node = MAPPER.readTree(raw);
-            double score = node.path("qualityScore").asDouble(0.0);
-            String critique = node.path("critique").asText("No critique");
-            return new Reflection(score, critique);
-        } catch (Exception ignored) {
-            return new Reflection(0.0, "Invalid reflector output");
-        }
-    }
-
-    private record Reflection(double score, String critique) {}
 }
