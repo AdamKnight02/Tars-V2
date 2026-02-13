@@ -36,6 +36,9 @@ public final class CodexOrchestrator {
      */
     public String generateDiffOnly(String filePath, String task) {
         String exactTargetFilePath = requireTargetFilePath(filePath);
+        if (task == null || task.isBlank()) {
+            throw new IllegalArgumentException("Task description is required for diff generation.");
+        }
         String fileContent = readFileFromSandbox(exactTargetFilePath);
         String prompt = buildPrompt(task, exactTargetFilePath, fileContent);
         String rawDiff = llmClient.complete(
