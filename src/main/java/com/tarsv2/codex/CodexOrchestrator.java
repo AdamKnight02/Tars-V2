@@ -26,31 +26,24 @@ public final class CodexOrchestrator {
     }
 
     /**
-     * Generates a unified diff for the given instruction.
+     * Generates a unified diff for the given file path and task instruction.
      * Reads the target file from the sandbox and injects its full contents into
      * the prompt for deterministic diff generation against that exact file path.
      *
-     * @param instruction  the codex instruction describing the desired change
-     * @param targetFilePath relative path to the target file
+     * @param filePath relative path to the target file
+     * @param task the codex instruction describing the desired change
      * @return raw unified diff response from the actor LLM
      */
-    public String generateDiffOnly(String instruction, String targetFilePath) {
-        String exactTargetFilePath = requireTargetFilePath(targetFilePath);
+    public String generateDiffOnly(String filePath, String task) {
+        String exactTargetFilePath = requireTargetFilePath(filePath);
         String fileContent = readFileFromSandbox(exactTargetFilePath);
-        String prompt = buildPrompt(instruction, exactTargetFilePath, fileContent);
+        String prompt = buildPrompt(task, exactTargetFilePath, fileContent);
         String rawDiff = llmClient.complete(
                 "You are a deterministic patch generator.",
                 prompt
         );
         log.info("Raw LLM diff output:\n{}", rawDiff);
         return rawDiff;
-    }
-
-    /**
-     * Generates a unified diff for the given instruction without a specific target file.
-     */
-    public String generateDiffOnly(String instruction) {
-        throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
     }
 
     /**
@@ -87,14 +80,14 @@ public final class CodexOrchestrator {
 
     private String requireTargetFilePath(String targetFilePath) {
         if (targetFilePath == null || targetFilePath.isBlank()) {
-            throw new IllegalArgumentException("Target file path is required.");
+            throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
         }
         return targetFilePath;
     }
 
     private String readFileFromSandbox(String targetFilePath) {
         if (targetFilePath == null || targetFilePath.isBlank()) {
-            throw new IllegalArgumentException("Target file path is required.");
+            throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
         }
         Path filePath = sandboxRoot.resolve(targetFilePath);
         if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {

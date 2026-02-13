@@ -105,14 +105,19 @@ public final class TarsCli implements Runnable {
             defaultValue = "/tmp/tars-metrics")
     private String metricsDir;
 
+    @Option(names = {"--file"}, description = "Target file path for Codex diff generation")
+    private String targetFile;
+
+    @Option(names = {"--task"}, description = "Task prompt for Codex diff generation")
+    private String task;
+
     /**
      * Main entry point.
      *
      * @param args CLI arguments
      */
     public static void main(String[] args) {
-        int exitCode = new CommandLine(new TarsCli()).execute(args);
-        System.exit(exitCode);
+        new CommandLine(new TarsCli()).execute(args);
     }
 
 
@@ -264,6 +269,11 @@ public final class TarsCli implements Runnable {
         } catch (Exception e) {
             log.warn("Web UI failed to start on port {}: {}", webPort, e.getMessage());
             dialogue.say("Web UI unavailable — CLI approval still works.", DialogueStyle.OutputMode.CHAT);
+        }
+
+        if (targetFile != null || task != null) {
+            runCodexDiffMode(codexOrchestrator);
+            return;
         }
 
         // ── Interactive Loop ─────────────────────────────────────
@@ -525,25 +535,33 @@ public final class TarsCli implements Runnable {
                         );
                     } else if (input.startsWith("codex ")) {
                         String topic = input.substring("codex ".length()).trim();
-                        String diff = codexOrchestrator.generateDiffOnly(topic);
-                        log.info("Codex raw diff:\n{}", diff);
-                        PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
-                        log.info("Codex validation result: {}", validationResult.message());
-                        PatchProposal proposal = new PatchProposal(
-                                java.util.UUID.randomUUID(),
-                                diff,
-                                topic,
-                                "src/main/java/com/tarsv2",
-                                PatchProposal.Status.PENDING
-                        );
-                        proposalRegistry.submit(proposal, validationResult.referencedFiles(), validationResult.message());
-                        if (!validationResult.valid()) {
-                            proposalRegistry.updateStatus(proposal.getId(), PatchProposal.Status.FAILED, validationResult.message());
-                            System.out.println("[codex] Proposal rejected by validator: " + validationResult.message());
+                        if (targetFile == null || targetFile.isBlank()) {
+                            System.out.println("[codex] Friendly error: missing --file argument. Run with --file <path> --task \"<task>\".");
                             continue;
                         }
-                        System.out.println(diff);
-                        System.out.println("[codex] Proposal created: " + proposal.getId());
+                        try {
+                            String diff = codexOrchestrator.generateDiffOnly(targetFile, topic);
+                            log.info("Codex raw diff:\n{}", diff);
+                            PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
+                            log.info("Codex validation result: {}", validationResult.message());
+                            PatchProposal proposal = new PatchProposal(
+                                    java.util.UUID.randomUUID(),
+                                    diff,
+                                    topic,
+                                    targetFile,
+                                    PatchProposal.Status.PENDING
+                            );
+                            proposalRegistry.submit(proposal, validationResult.referencedFiles(), validationResult.message());
+                            if (!validationResult.valid()) {
+                                proposalRegistry.updateStatus(proposal.getId(), PatchProposal.Status.FAILED, validationResult.message());
+                                System.out.println("[codex] Proposal rejected by validator: " + validationResult.message());
+                                continue;
+                            }
+                            System.out.println(diff);
+                            System.out.println("[codex] Proposal created: " + proposal.getId());
+                        } catch (IllegalArgumentException e) {
+                            System.out.println("[codex] Friendly error: " + e.getMessage());
+                        }
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
                         if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
@@ -579,6 +597,16 @@ public final class TarsCli implements Runnable {
                     }
                 }
             }
+        }
+    }
+
+
+    private void runCodexDiffMode(CodexOrchestrator codexOrchestrator) {
+        try {
+            String diff = codexOrchestrator.generateDiffOnly(targetFile, task);
+            System.out.println(diff);
+        } catch (IllegalArgumentException e) {
+            System.out.println("[codex] Friendly error: " + e.getMessage());
         }
     }
 
