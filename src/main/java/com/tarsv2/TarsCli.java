@@ -272,6 +272,14 @@ public final class TarsCli implements Runnable {
         }
 
         if (targetFile != null || task != null) {
+            if (targetFile == null || targetFile.isBlank()) {
+                System.out.println("[codex] Error: --file is required when using --task.");
+                return;
+            }
+            if (task == null || task.isBlank()) {
+                System.out.println("[codex] Error: --task is required when using --file.");
+                return;
+            }
             runCodexDiffMode(codexOrchestrator);
             return;
         }
@@ -605,7 +613,7 @@ public final class TarsCli implements Runnable {
         try {
             String diff = codexOrchestrator.generateDiffOnly(targetFile, task);
             System.out.println(diff);
-        } catch (IllegalArgumentException e) {
+        } catch (Exception e) {
             System.out.println("[codex] Friendly error: " + e.getMessage());
         }
     }
