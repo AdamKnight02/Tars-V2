@@ -525,8 +525,7 @@ public final class TarsCli implements Runnable {
                         );
                     } else if (input.startsWith("codex ")) {
                         String topic = input.substring("codex ".length()).trim();
-                        String codexOutput = codexOrchestrator.generateDiffOnly(topic);
-                        String diff = codexOrchestrator.extractDiff(codexOutput);
+                        String diff = codexOrchestrator.generateDiffOnly(topic);
                         PatchValidator.ValidationResult validationResult = patchValidator.validate(diff);
                         PatchProposal proposal = new PatchProposal(
                                 java.util.UUID.randomUUID(),
@@ -541,7 +540,7 @@ public final class TarsCli implements Runnable {
                             dialogue.say("Codex proposal rejected by validator: " + validationResult.message(), DialogueStyle.OutputMode.CHAT);
                             continue;
                         }
-                        System.out.println(codexOutput);
+                        System.out.println(diff);
                         dialogue.say("Codex proposal created: " + proposal.getId(), DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("propose ")) {
                         String topic = input.substring("propose ".length()).trim();
