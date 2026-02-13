@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DeterministicPatchBuilderTest {
 
     @Test
-    void structuredChangeProducesUnifiedDiff() {
+    void structuredChangeProducesUnifiedDiff() throws Exception {
         DeterministicPatchBuilder builder = new DeterministicPatchBuilder();
         String original = "package demo;\n\nclass Sample {\n}\n";
         ChangeRequest request = new ChangeRequest(
