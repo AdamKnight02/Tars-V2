@@ -33,7 +33,7 @@ public final class CodexOrchestrator {
         this.patchBuilder = Objects.requireNonNull(patchBuilder);
     }
 
-    public String generateDiffOnly(String targetFilePath, String task) {
+    public String generateDiffOnly(String targetFilePath, String task) throws IOException {
         String safeTargetFilePath = requireTargetFilePath(targetFilePath);
         String safeTask = requireTask(task);
         String originalContent = readFileFromSandbox(safeTargetFilePath);
