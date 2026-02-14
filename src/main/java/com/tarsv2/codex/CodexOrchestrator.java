@@ -1,7 +1,7 @@
 package com.tarsv2.codex;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tarsv2.llm.LlmClient;
+import com.tarsv2.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,20 +15,20 @@ public final class CodexOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final LlmClient llmClient;
+    private final ModeRouter modeRouter;
     private final Path sandboxRoot;
     private final DeterministicPatchBuilder patchBuilder;
 
-    public CodexOrchestrator(LlmClient llmClient) {
-        this(llmClient, Path.of("."), new DeterministicPatchBuilder());
+    public CodexOrchestrator(ModeRouter modeRouter) {
+        this(modeRouter, Path.of("."), new DeterministicPatchBuilder());
     }
 
-    public CodexOrchestrator(LlmClient llmClient, Path sandboxRoot) {
-        this(llmClient, sandboxRoot, new DeterministicPatchBuilder());
+    public CodexOrchestrator(ModeRouter modeRouter, Path sandboxRoot) {
+        this(modeRouter, sandboxRoot, new DeterministicPatchBuilder());
     }
 
-    CodexOrchestrator(LlmClient llmClient, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
-        this.llmClient = Objects.requireNonNull(llmClient);
+    CodexOrchestrator(ModeRouter modeRouter, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
+        this.modeRouter = Objects.requireNonNull(modeRouter);
         this.sandboxRoot = Objects.requireNonNull(sandboxRoot);
         this.patchBuilder = Objects.requireNonNull(patchBuilder);
     }
@@ -37,13 +37,21 @@ public final class CodexOrchestrator {
         String safeTargetFilePath = requireTargetFilePath(targetFilePath);
         String safeTask = requireTask(task);
         String originalContent = readFileFromSandbox(safeTargetFilePath);
-        String prompt = buildPrompt(safeTask, safeTargetFilePath, originalContent);
-        String structuredJson = llmClient.completeStructuredJson(
-                "You produce ONLY JSON objects describing file edits.",
-                prompt
+
+        ModelResponse response = modeRouter.route(
+                Mode.CODEX,
+                new ModelRequest(
+                        "You produce ONLY JSON objects describing file edits.",
+                        buildPrompt(safeTask, safeTargetFilePath, originalContent),
+                        true
+                )
         );
 
-        ChangeRequest changeRequest = parseChangeRequest(structuredJson);
+        if (response.status() != ModelResponse.Status.OK) {
+            throw new IllegalStateException("CODEX model failed: " + response.message());
+        }
+
+        ChangeRequest changeRequest = parseChangeRequest(response.content());
         String diff = patchBuilder.buildUnifiedDiff(safeTargetFilePath, originalContent, changeRequest);
         log.info("Deterministic diff generated for {} ({} chars)", safeTargetFilePath, diff.length());
         return diff;
@@ -58,20 +66,11 @@ public final class CodexOrchestrator {
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
-        String exactTargetPath = requireTargetFilePath(targetFilePath);
-        String contents = Objects.requireNonNull(fileContent, "fileContent must not be null");
-
         return "You are a deterministic code change planner.\n"
-                + "Target file path:\n"
-                + exactTargetPath
-                + "\n\n"
-                + "Current file contents:\n"
-                + contents
-                + "\n\n"
-                + "Task:\n"
-                + instruction
-                + "\n\n"
-                + "Return ONLY valid JSON with this shape:\n"
+                + "Target file path:\n" + requireTargetFilePath(targetFilePath)
+                + "\n\nCurrent file contents:\n" + Objects.requireNonNull(fileContent)
+                + "\n\nTask:\n" + instruction
+                + "\n\nReturn ONLY valid JSON with this shape:\n"
                 + "{\n"
                 + "  \"action\": \"<action identifier>\",\n"
                 + "  \"locationHint\": \"<context hint>\",\n"
@@ -107,12 +106,9 @@ public final class CodexOrchestrator {
             throw new IllegalArgumentException("Target file not found in sandbox: " + targetFilePath);
         }
         try {
-            String content = Files.readString(filePath);
-            log.info("Read {} bytes from sandbox file: {}", content.length(), targetFilePath);
-            return content;
+            return Files.readString(filePath);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read sandbox file: " + targetFilePath, e);
         }
     }
-
 }

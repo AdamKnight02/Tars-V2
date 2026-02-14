@@ -1,9 +1,10 @@
 package com.tarsv2.llm;
 
+import com.tarsv2.model.*;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayDeque;
-import java.util.Queue;
+import java.time.Duration;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,56 +12,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ResearchOrchestratorTest {
 
     @Test
-    void returnsValidResearchJsonWhenActorOutputIsValid() {
-        Queue<String> responses = new ArrayDeque<>();
-        responses.add("{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}");
-        responses.add("{\"qualityScore\":0.95,\"critique\":\"Schema compliant and specific\"}");
-
-        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
-
-        String result = orchestrator.research("Improve CLI help formatting");
-
-        assertEquals("{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}", result);
-        assertTrue(responses.isEmpty());
-    }
-
-    @Test
-    void retriesWhenActorReturnsInvalidJsonBeforeSucceeding() {
-        Queue<String> responses = new ArrayDeque<>();
-        responses.add("not-json");
-        responses.add("{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}");
-        responses.add("{\"qualityScore\":0.9,\"critique\":\"Valid output\"}");
-
-        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+    void returnsNotImplementedWhenResearchModelDisabled() {
+        ModeRouter router = new ModeRouter(
+                new ModelRegistry("llama", "minimax", "disabled", Duration.ofSeconds(5), 3),
+                Map.of("disabled", new GlmResearchModel())
+        );
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
 
         String result = orchestrator.research("Improve CLI help formatting");
 
-        assertTrue(result.contains("\"summary\""));
-        assertTrue(responses.isEmpty());
-    }
-
-    @Test
-    void returnsInvalidJsonErrorAfterRetryExhaustion() {
-        Queue<String> responses = new ArrayDeque<>();
-        responses.add("invalid");
-        responses.add("still invalid");
-        responses.add("not json");
-        responses.add("wrong again");
-
-        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
-
-        String result = orchestrator.research("Improve CLI help formatting");
-
-        assertEquals("{\"error\":\"INVALID_JSON\"}", result);
+        assertEquals("{\"error\":\"NOT_IMPLEMENTED\"}", result);
     }
 
     @Test
     void returnsInsufficientContextWhenInputIsVague() {
-        LlmService service = (role, systemPrompt, userPrompt) -> "{}";
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+        ModeRouter router = new ModeRouter(
+                new ModelRegistry("llama", "minimax", "disabled", Duration.ofSeconds(5), 3),
+                Map.of("disabled", new GlmResearchModel())
+        );
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
 
         String result = orchestrator.research("help");
 
@@ -68,19 +38,16 @@ class ResearchOrchestratorTest {
     }
 
     @Test
-    void revisionOccursWhenReflectorContainsDisallowedTerms() {
-        Queue<String> responses = new ArrayDeque<>();
-        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
-        responses.add("{\"qualityScore\":0.99,\"critique\":\"Interstellar reference appeared\"}");
-        responses.add("{\"summary\":\"Improve sandbox dispatcher behavior\",\"affected_files\":[\"src/main/java/com/tarsv2/environment/SandboxDispatcher.java\"],\"diff\":\"+ tighten dispatch checks with repository classes\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert sandbox dispatcher updates\"}");
-        responses.add("{\"qualityScore\":0.91,\"critique\":\"Grounded and specific\"}");
+    void parsesValidResearchJsonWhenImplementedModelReturnsSchema() {
+        ModeRouter router = new ModeRouter(
+                new ModelRegistry("llama", "minimax", "glm", Duration.ofSeconds(5), 3),
+                Map.of("glm", request -> ModelResponse.ok("{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}"))
+        );
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
 
-        LlmService service = (role, systemPrompt, userPrompt) -> responses.remove();
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(service);
+        String result = orchestrator.research("Improve CLI help formatting");
 
-        String result = orchestrator.research("Improve sandbox dispatcher behavior");
-
-        assertTrue(result.contains("repository classes"));
-        assertTrue(responses.isEmpty());
+        assertTrue(result.contains("\"summary\""));
+        assertTrue(result.contains("\"risk_level\":\"LOW\""));
     }
 }

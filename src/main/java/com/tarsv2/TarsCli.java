@@ -17,6 +17,7 @@ import com.tarsv2.codex.PatchProposal;
 import com.tarsv2.codex.PatchValidator;
 import com.tarsv2.memory.MemorySystem;
 import com.tarsv2.metrics.ObservationMetrics;
+import com.tarsv2.model.*;
 import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
@@ -87,14 +88,11 @@ public final class TarsCli implements Runnable {
     @Option(names = {"--ollama-url"}, description = "Ollama base URL")
     private String ollamaUrl = envOrDefault("TARS_OLLAMA_URL", "http://localhost:11434");
 
-    @Option(names = {"--actor-model"}, description = "Actor model name")
-    private String actorModel = envOrDefault("TARS_ACTOR_MODEL", "llama3:8b");
+    @Option(names = {"--chat-model"}, description = "Chat model name")
+    private String chatModel = envOrDefault("TARS_MODEL_CHAT", "llama3:8b");
 
-    @Option(names = {"--reflector-model"}, description = "Reflector model name")
-    private String reflectorModel = envOrDefault("TARS_REFLECTOR_MODEL", "qwen2.5:14b");
-
-    @Option(names = {"--chat-quality-threshold"}, description = "Chat reflector quality threshold (0.0-1.0)")
-    private Double chatQualityThreshold;
+    @Option(names = {"--codex-model"}, description = "Codex model name")
+    private String codexModel = envOrDefault("TARS_MODEL_CODEX", "minimax-m1");
 
     @Option(names = {"--web-port"}, description = "Web UI port for proposal review",
             defaultValue = "8080")
@@ -173,8 +171,8 @@ public final class TarsCli implements Runnable {
 
         // ── Secrets ─────────────────────────────────────────────
         SecretManager secretManager = new SecretManager();
-        var actorKeyHandle = secretManager.registerFromEnv("actor-api-key", "TARS_ACTOR_API_KEY");
-        var reflectorKeyHandle = secretManager.registerFromEnv("reflector-api-key", "TARS_REFLECTOR_API_KEY");
+        var chatKeyHandle = secretManager.registerFromEnv("chat-api-key", "TARS_CHAT_API_KEY");
+        var codexKeyHandle = secretManager.registerFromEnv("codex-api-key", "TARS_CODEX_API_KEY");
         var scraperTokenHandle = secretManager.registerFromEnv("scraper-token", "TARS_SCRAPER_TOKEN");
         var githubTokenHandle = secretManager.registerFromEnv("github-token", "TARS_GITHUB_TOKEN");
 
@@ -182,12 +180,22 @@ public final class TarsCli implements Runnable {
         PodmanController podman = new PodmanController(dialogue);
         dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size(), DialogueStyle.OutputMode.CHAT);
 
-        // ── Dual-LLM ────────────────────────────────────────────
+        // ── Deterministic Mode Router ─────────────────────────
         String ollamaEndpoint = buildOllamaGenerateEndpoint(ollamaUrl);
-        LlmClient actor = new LlmClient(LlmRole.ACTOR, ollamaEndpoint, actorModel, actorKeyHandle);
-        LlmClient reflector = new LlmClient(LlmRole.REFLECTOR, ollamaEndpoint, reflectorModel, reflectorKeyHandle);
-        LlmService llmService = new DefaultLlmService(actor, reflector);
-        DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(actor, reflector, dialogue);
+        ModelRegistry modelRegistry = ModelRegistry.fromEnvironment();
+        LlmClient chatClient = new LlmClient(ollamaEndpoint, chatModel, modelRegistry.modelTimeout(), chatKeyHandle);
+        LlmClient codexClient = new LlmClient(ollamaEndpoint, codexModel, modelRegistry.modelTimeout(), codexKeyHandle);
+
+        ModeRouter modeRouter = new ModeRouter(
+                modelRegistry,
+                java.util.Map.of(
+                        "llama", new LlamaChatModel(chatClient, modelRegistry.circuitBreakerFailureThreshold()),
+                        "minimax", new MiniMaxCodexModel(codexClient, modelRegistry.circuitBreakerFailureThreshold()),
+                        "disabled", new GlmResearchModel(),
+                        "glm", new GlmResearchModel()
+                )
+        );
+        DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(modeRouter, dialogue);
 
         // ── Metrics & Learning ──────────────────────────────────
         ObservationMetrics metrics = new ObservationMetrics(
@@ -237,15 +245,10 @@ public final class TarsCli implements Runnable {
         // ── Context Discipline ──────────────────────────────────
         ContextBudget contextBudget = new ContextBudget(8000);
         ContextSummarizer contextSummarizer = new ContextSummarizer();
-        ChatConfig baseChatConfig = ChatConfig.fromEnvironment();
-        double threshold = chatQualityThreshold != null
-                ? Math.max(0.0, Math.min(1.0, chatQualityThreshold))
-                : baseChatConfig.qualityThreshold();
-        ChatConfig chatConfig = new ChatConfig(threshold);
         ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
-                llmService, chatConfig, contextSummarizer, contextBudget);
-        ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(llmService);
-        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(actor);
+                modeRouter, contextSummarizer, contextBudget);
+        ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(modeRouter);
+        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(modeRouter);
         PatchValidator patchValidator = new PatchValidator();
         SandboxGitService sandboxGitService = new SandboxGitService(Path.of("."));
 
