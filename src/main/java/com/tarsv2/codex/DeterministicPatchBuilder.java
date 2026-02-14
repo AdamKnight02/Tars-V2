@@ -93,6 +93,7 @@ public final class DeterministicPatchBuilder {
             inserter.flush();
 
             formatter.setRepository(repo);
+            formatter.setContext(3);
             formatter.format(treeParser(repo, oldTree), treeParser(repo, newTree));
             formatter.flush();
             return out.toString(StandardCharsets.UTF_8);

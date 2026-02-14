@@ -2,22 +2,21 @@ package com.tarsv2.llm;
 
 import com.tarsv2.context.ContextBudget;
 import com.tarsv2.context.ContextSummarizer;
-import com.tarsv2.model.*;
 
 import java.util.Objects;
 
 public final class ChatOrchestrator {
 
-    private final ModeRouter modeRouter;
+    private final ReasoningModelClient minimaxClient;
     private final ContextSummarizer contextSummarizer;
     private final ContextBudget contextBudget;
 
     public ChatOrchestrator(
-            ModeRouter modeRouter,
+            ReasoningModelClient minimaxClient,
             ContextSummarizer contextSummarizer,
             ContextBudget contextBudget
     ) {
-        this.modeRouter = Objects.requireNonNull(modeRouter);
+        this.minimaxClient = Objects.requireNonNull(minimaxClient);
         this.contextSummarizer = Objects.requireNonNull(contextSummarizer);
         this.contextBudget = Objects.requireNonNull(contextBudget);
     }
@@ -33,12 +32,7 @@ public final class ChatOrchestrator {
             prompt = contextSummarizer.fitToBudget(prompt, contextBudget);
         }
 
-        ModelResponse response = modeRouter.route(
-                Mode.CHAT,
-                new ModelRequest("You are TARS chat mode.", prompt, false)
-        );
-        return response.status() == ModelResponse.Status.OK
-                ? response.content()
-                : "Chat model unavailable: " + response.message();
+        String response = minimaxClient.chat(prompt);
+        return response.startsWith("[ERROR]") ? "Chat model unavailable: " + response : response;
     }
 }

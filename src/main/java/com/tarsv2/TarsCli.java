@@ -85,14 +85,11 @@ public final class TarsCli implements Runnable {
             defaultValue = "/tmp/tars-sandbox")
     private String sandboxDir;
 
-    @Option(names = {"--ollama-url"}, description = "Ollama base URL")
-    private String ollamaUrl = envOrDefault("TARS_OLLAMA_URL", "http://localhost:11434");
+    @Option(names = {"--minimax-url"}, description = "MiniMax API endpoint")
+    private String minimaxUrl = envOrDefault("TARS_MINIMAX_API_URL", "https://api.minimax.chat/v1/text/chatcompletion_v2");
 
-    @Option(names = {"--chat-model"}, description = "Chat model name")
-    private String chatModel = envOrDefault("TARS_MODEL_CHAT", "llama3:8b");
-
-    @Option(names = {"--codex-model"}, description = "Codex model name")
-    private String codexModel = envOrDefault("TARS_MODEL_CODEX", "minimax-m1");
+    @Option(names = {"--minimax-model"}, description = "MiniMax model name")
+    private String minimaxModel = envOrDefault("TARS_MINIMAX_MODEL", "MiniMax-M2.5");
 
     @Option(names = {"--web-port"}, description = "Web UI port for proposal review",
             defaultValue = "8080")
@@ -127,10 +124,6 @@ public final class TarsCli implements Runnable {
         return (value == null || value.isBlank()) ? fallback : value;
     }
 
-    private static String buildOllamaGenerateEndpoint(String baseUrl) {
-        String trimmed = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        return trimmed + "/api/generate";
-    }
 
     @Override
     public void run() {
@@ -171,8 +164,6 @@ public final class TarsCli implements Runnable {
 
         // ── Secrets ─────────────────────────────────────────────
         SecretManager secretManager = new SecretManager();
-        var chatKeyHandle = secretManager.registerFromEnv("chat-api-key", "TARS_CHAT_API_KEY");
-        var codexKeyHandle = secretManager.registerFromEnv("codex-api-key", "TARS_CODEX_API_KEY");
         var scraperTokenHandle = secretManager.registerFromEnv("scraper-token", "TARS_SCRAPER_TOKEN");
         var githubTokenHandle = secretManager.registerFromEnv("github-token", "TARS_GITHUB_TOKEN");
 
@@ -180,22 +171,11 @@ public final class TarsCli implements Runnable {
         PodmanController podman = new PodmanController(dialogue);
         dialogue.say("Podman controller armed. Whitelisted images: " + podman.getAllowedImages().size(), DialogueStyle.OutputMode.CHAT);
 
-        // ── Deterministic Mode Router ─────────────────────────
-        String ollamaEndpoint = buildOllamaGenerateEndpoint(ollamaUrl);
+        // ── MiniMax Primary Model Clients ─────────────────────
         ModelRegistry modelRegistry = ModelRegistry.fromEnvironment();
-        LlmClient chatClient = new LlmClient(ollamaEndpoint, chatModel, modelRegistry.modelTimeout(), chatKeyHandle);
-        LlmClient codexClient = new LlmClient(ollamaEndpoint, codexModel, modelRegistry.modelTimeout(), codexKeyHandle);
-
-        ModeRouter modeRouter = new ModeRouter(
-                modelRegistry,
-                java.util.Map.of(
-                        "llama", new LlamaChatModel(chatClient, modelRegistry.circuitBreakerFailureThreshold()),
-                        "minimax", new MiniMaxCodexModel(codexClient, modelRegistry.circuitBreakerFailureThreshold()),
-                        "disabled", new GlmResearchModel(),
-                        "glm", new GlmResearchModel()
-                )
-        );
-        DualLlmOrchestrator orchestrator = new DualLlmOrchestrator(modeRouter, dialogue);
+        MinimaxClient minimaxClient = new MinimaxClient(minimaxUrl, minimaxModel, modelRegistry.modelTimeout());
+        ReasoningModelClient glmClient = new GlmClient();
+        SingleModelOrchestrator orchestrator = new SingleModelOrchestrator(minimaxClient, dialogue);
 
         // ── Metrics & Learning ──────────────────────────────────
         ObservationMetrics metrics = new ObservationMetrics(
@@ -246,9 +226,9 @@ public final class TarsCli implements Runnable {
         ContextBudget contextBudget = new ContextBudget(8000);
         ContextSummarizer contextSummarizer = new ContextSummarizer();
         ChatOrchestrator chatOrchestrator = new ChatOrchestrator(
-                modeRouter, contextSummarizer, contextBudget);
-        ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(modeRouter);
-        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(modeRouter);
+                minimaxClient, contextSummarizer, contextBudget);
+        ResearchOrchestrator researchOrchestrator = new ResearchOrchestrator(glmClient);
+        CodexOrchestrator codexOrchestrator = new CodexOrchestrator(minimaxClient);
         PatchValidator patchValidator = new PatchValidator();
         SandboxGitService sandboxGitService = new SandboxGitService(Path.of("."));
 

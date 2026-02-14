@@ -12,9 +12,9 @@ public record ModelRegistry(
 
     public static ModelRegistry fromEnvironment() {
         return new ModelRegistry(
-                envOrDefault("TARS_MODEL_CHAT", "llama"),
+                envOrDefault("TARS_MODEL_CHAT", "minimax"),
                 envOrDefault("TARS_MODEL_CODEX", "minimax"),
-                envOrDefault("TARS_MODEL_RESEARCH", "disabled"),
+                envOrDefault("TARS_MODEL_RESEARCH", "glm"),
                 Duration.ofSeconds(parseIntEnv("TARS_MODEL_TIMEOUT_SECONDS", 45)),
                 parseIntEnv("TARS_MODEL_CIRCUIT_BREAKER_FAILURES", 3)
         );

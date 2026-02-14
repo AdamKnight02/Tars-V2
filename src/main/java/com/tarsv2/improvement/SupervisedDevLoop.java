@@ -3,7 +3,7 @@ package com.tarsv2.improvement;
 import com.tarsv2.approval.ApprovalGate;
 import com.tarsv2.approval.ChangeProposal;
 import com.tarsv2.chunk.ChunkLearningEngine;
-import com.tarsv2.llm.DualLlmOrchestrator;
+import com.tarsv2.llm.SingleModelOrchestrator;
 import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.personality.DialogueStyle;
 import com.tarsv2.sandbox.JGitSandboxService;
@@ -30,13 +30,12 @@ public final class SupervisedDevLoop {
 
     private static final Logger log = LoggerFactory.getLogger(SupervisedDevLoop.class);
 
-    private static final double REFLECTION_THRESHOLD = 0.7;
     private static final int MAX_ITERATIONS = 3;
     private static final int DEFAULT_DIFF_LIMIT = 12000;
 
     private final ObservationMetrics metrics;
     private final ChunkLearningEngine chunkLearning;
-    private final DualLlmOrchestrator orchestrator;
+    private final SingleModelOrchestrator orchestrator;
     private final JGitSandboxService jgitSandboxService;
     private final ApprovalGate approvalGate;
     private final DialogueStyle dialogue;
@@ -46,7 +45,7 @@ public final class SupervisedDevLoop {
     public SupervisedDevLoop(
             ObservationMetrics metrics,
             ChunkLearningEngine chunkLearning,
-            DualLlmOrchestrator orchestrator,
+            SingleModelOrchestrator orchestrator,
             JGitSandboxService jgitSandboxService,
             ApprovalGate approvalGate,
             DialogueStyle dialogue,
@@ -106,13 +105,13 @@ public final class SupervisedDevLoop {
         String task = "Identify one concrete, bounded improvement for scope: " + scope
                 + "\n\nObservation data:\n" + observation.observationText;
 
-        DualLlmOrchestrator.OrchestratorResult result = orchestrator.process(task, DialogueStyle.OutputMode.SYSTEM);
-        if (!result.passed() || result.qualityScore() < REFLECTION_THRESHOLD || isVague(result.output())) {
-            dialogue.say("Analyze phase rejected by reflector quality constraints.", DialogueStyle.OutputMode.SYSTEM);
+        SingleModelOrchestrator.OrchestratorResult result = orchestrator.process(task, DialogueStyle.OutputMode.SYSTEM);
+        if (!result.passed() || isVague(result.output())) {
+            dialogue.say("Analyze phase rejected by validator quality constraints.", DialogueStyle.OutputMode.SYSTEM);
             return null;
         }
 
-        return new AnalyzedImprovement(result.output(), result.qualityScore());
+        return new AnalyzedImprovement(result.output());
     }
 
     public GeneratedTest generateFailingTest(AnalyzedImprovement analyzed, int iteration) {
@@ -140,16 +139,12 @@ public final class SupervisedDevLoop {
     }
 
     public PatchProposal proposePatch(AnalyzedImprovement analyzed, GeneratedTest test, int iteration) {
-        DualLlmOrchestrator.OrchestratorResult patchResult = orchestrator.process(
+        SingleModelOrchestrator.OrchestratorResult patchResult = orchestrator.process(
                 "Propose a minimal unified diff patch to satisfy this failing test only:\n"
                         + test.testContent + "\nImprovement context:\n" + analyzed.improvement,
                 DialogueStyle.OutputMode.SYSTEM
         );
 
-        if (patchResult.qualityScore() < REFLECTION_THRESHOLD) {
-            dialogue.say("Patch rejected: reflector score below threshold.", DialogueStyle.OutputMode.SYSTEM);
-            return null;
-        }
 
         String diff = patchResult.output();
         if (diff.length() > diffSizeLimit) {
@@ -169,7 +164,7 @@ public final class SupervisedDevLoop {
         ChangeProposal proposal = new ChangeProposal(
                 "Supervised dev-loop improvement: " + scope,
                 patch.diff,
-                "Reflector score=" + analyzed.score + ", iteration=" + patch.iteration
+                "Single-pass MiniMax patch, iteration=" + patch.iteration
         );
 
         String proposalId = approvalGate.submit(proposal);
@@ -277,18 +272,14 @@ public final class SupervisedDevLoop {
         public String observationText() { return observationText; }
     }
 
-    /** Analyze phase output after Actor+Reflector quality filtering. */
+    /** Analyze phase output after single-pass validation. */
     public static final class AnalyzedImprovement {
         private final String improvement;
-        private final double score;
-
-        public AnalyzedImprovement(String improvement, double score) {
+        public AnalyzedImprovement(String improvement) {
             this.improvement = improvement;
-            this.score = score;
         }
 
         public String improvement() { return improvement; }
-        public double score() { return score; }
     }
 
     /** Generated failing test metadata. */

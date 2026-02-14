@@ -67,7 +67,7 @@ public final class DepopAgent implements TarsAgent {
 
             if (result.isSuccess()) {
                 dialogue.say("Depop data collected. Analyzing trends...", DialogueStyle.OutputMode.CHAT);
-                // TODO: Feed result.stdout() into DualLlmOrchestrator for trend analysis
+                // TODO: Feed result.stdout() into SingleModelOrchestrator for trend analysis
                 return AgentResult.success(
                         getName(),
                         result.stdout(),

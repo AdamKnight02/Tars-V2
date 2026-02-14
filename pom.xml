@@ -13,7 +13,7 @@
     <name>TARS v2</name>
     <description>
         Human-approved, self-improving autonomous agent with personality,
-        humor, and bounded free agency. Built with dual-LLM architecture
+        humor, and bounded free agency. Built with MiniMax-first architecture
         and sandboxed Podman execution.
     </description>
 

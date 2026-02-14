@@ -3,7 +3,7 @@ package com.tarsv2.improvement;
 import com.tarsv2.approval.ApprovalGate;
 import com.tarsv2.approval.ChangeProposal;
 import com.tarsv2.learning.LearningEngine;
-import com.tarsv2.llm.DualLlmOrchestrator;
+import com.tarsv2.llm.SingleModelOrchestrator;
 import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.personality.DialogueStyle;
 import com.tarsv2.personality.EmotionState;
@@ -20,7 +20,7 @@ import java.util.Objects;
  * <p>The loop follows this sequence:</p>
  * <ol>
  *   <li><strong>Observe</strong> — gather metrics, logs, and performance data</li>
- *   <li><strong>Reflect</strong> — use the Reflector LLM to identify improvement areas</li>
+ *   <li><strong>Reflect</strong> — use the Validator LLM to identify improvement areas</li>
  *   <li><strong>Propose</strong> — use the Actor LLM to generate concrete changes</li>
  *   <li><strong>Test</strong> — validate proposals in the sandbox</li>
  *   <li><strong>Request Approval</strong> — submit to the {@link ApprovalGate}</li>
@@ -38,7 +38,7 @@ public final class SelfImprovementLoop {
 
     private static final Logger log = LoggerFactory.getLogger(SelfImprovementLoop.class);
 
-    private final DualLlmOrchestrator orchestrator;
+    private final SingleModelOrchestrator orchestrator;
     private final ApprovalGate approvalGate;
     private final GitStagingService stagingService;
     private final DialogueStyle dialogue;
@@ -54,7 +54,7 @@ public final class SelfImprovementLoop {
      * @param profile        personality profile (for emotion transitions)
      */
     public SelfImprovementLoop(
-            DualLlmOrchestrator orchestrator,
+            SingleModelOrchestrator orchestrator,
             ApprovalGate approvalGate,
             GitStagingService stagingService,
             DialogueStyle dialogue,
@@ -67,7 +67,7 @@ public final class SelfImprovementLoop {
      * Full constructor with metrics and learning engine integration.
      */
     public SelfImprovementLoop(
-            DualLlmOrchestrator orchestrator,
+            SingleModelOrchestrator orchestrator,
             ApprovalGate approvalGate,
             GitStagingService stagingService,
             DialogueStyle dialogue,
@@ -99,7 +99,7 @@ public final class SelfImprovementLoop {
         log.info(dialogue.narrate("Observations gathered: " + observations.length() + " chars"));
 
         // Step 2: Reflect (via dual-LLM)
-        DualLlmOrchestrator.OrchestratorResult result = orchestrator.process(
+        SingleModelOrchestrator.OrchestratorResult result = orchestrator.process(
                 "Analyze these observations and propose a concrete improvement:\n" + observations
         );
 
@@ -115,7 +115,7 @@ public final class SelfImprovementLoop {
         ChangeProposal proposal = new ChangeProposal(
                 "Self-improvement: " + context,
                 result.output(),
-                String.format("Quality score: %.2f after %d iterations", result.qualityScore(), result.iterations())
+                "Single-pass MiniMax proposal"
         );
 
         // Step 4: Test in sandbox
