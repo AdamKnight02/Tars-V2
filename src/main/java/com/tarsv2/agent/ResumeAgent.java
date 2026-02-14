@@ -69,7 +69,7 @@ public final class ResumeAgent implements TarsAgent {
 
             if (result.isSuccess()) {
                 dialogue.say("Resume parsed successfully. Let me analyze the results...", DialogueStyle.OutputMode.CHAT);
-                // TODO: Feed result.stdout() into DualLlmOrchestrator for analysis
+                // TODO: Feed result.stdout() into SingleModelOrchestrator for analysis
                 return AgentResult.success(
                         getName(),
                         result.stdout(),

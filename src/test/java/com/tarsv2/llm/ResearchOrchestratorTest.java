@@ -1,10 +1,6 @@
 package com.tarsv2.llm;
 
-import com.tarsv2.model.*;
 import org.junit.jupiter.api.Test;
-
-import java.time.Duration;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,11 +9,7 @@ class ResearchOrchestratorTest {
 
     @Test
     void returnsNotImplementedWhenResearchModelDisabled() {
-        ModeRouter router = new ModeRouter(
-                new ModelRegistry("llama", "minimax", "disabled", Duration.ofSeconds(5), 3),
-                Map.of("disabled", new GlmResearchModel())
-        );
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(new GlmClient());
 
         String result = orchestrator.research("Improve CLI help formatting");
 
@@ -26,11 +18,7 @@ class ResearchOrchestratorTest {
 
     @Test
     void returnsInsufficientContextWhenInputIsVague() {
-        ModeRouter router = new ModeRouter(
-                new ModelRegistry("llama", "minimax", "disabled", Duration.ofSeconds(5), 3),
-                Map.of("disabled", new GlmResearchModel())
-        );
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(new GlmClient());
 
         String result = orchestrator.research("help");
 
@@ -39,11 +27,17 @@ class ResearchOrchestratorTest {
 
     @Test
     void parsesValidResearchJsonWhenImplementedModelReturnsSchema() {
-        ModeRouter router = new ModeRouter(
-                new ModelRegistry("llama", "minimax", "glm", Duration.ofSeconds(5), 3),
-                Map.of("glm", request -> ModelResponse.ok("{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}"))
-        );
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(router);
+        ResearchOrchestrator orchestrator = new ResearchOrchestrator(new ReasoningModelClient() {
+            @Override
+            public String chat(String prompt) {
+                return "{\"summary\":\"Improve CLI help output formatting\",\"affected_files\":[\"src/main/java/com/tarsv2/TarsCli.java\"],\"diff\":\"+ aligned help rows\",\"risk_level\":\"LOW\",\"rollback_instructions\":\"Revert help format changes\"}";
+            }
+
+            @Override
+            public String generateDeterministicDiff(String prompt) {
+                return "";
+            }
+        });
 
         String result = orchestrator.research("Improve CLI help formatting");
 

@@ -3,7 +3,6 @@ package com.tarsv2.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.tarsv2.model.*;
 
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -16,11 +15,11 @@ public final class ResearchOrchestrator {
     private static final String INSUFFICIENT_CONTEXT_ERROR = "{\"error\":\"INSUFFICIENT_CONTEXT\"}";
     private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("LOW", "MODERATE", "HIGH");
 
-    private final ModeRouter modeRouter;
+    private final ReasoningModelClient glmClient;
     private final RepositoryContextInjector repositoryContextInjector;
 
-    public ResearchOrchestrator(ModeRouter modeRouter) {
-        this.modeRouter = Objects.requireNonNull(modeRouter);
+    public ResearchOrchestrator(ReasoningModelClient glmClient) {
+        this.glmClient = Objects.requireNonNull(glmClient);
         this.repositoryContextInjector = new RepositoryContextInjector();
     }
 
@@ -31,15 +30,12 @@ public final class ResearchOrchestrator {
         }
 
         String prompt = repositoryContextInjector.inject(buildResearchPrompt(topic)).augmentedPrompt();
-        ModelResponse response = modeRouter.route(
-                Mode.RESEARCH,
-                new ModelRequest("Return JSON only.", prompt, true)
-        );
-
-        if (response.status() == ModelResponse.Status.NOT_IMPLEMENTED) {
+        String raw = glmClient.chat(prompt);
+        if (raw.startsWith("[NOT_IMPLEMENTED]")) {
             return "{\"error\":\"NOT_IMPLEMENTED\"}";
         }
-        JsonNode parsed = parseAndValidateResearchJson(response.content());
+
+        JsonNode parsed = parseAndValidateResearchJson(raw);
         return parsed == null ? INVALID_JSON_ERROR : toCanonicalJson(parsed);
     }
 

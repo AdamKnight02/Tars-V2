@@ -1,7 +1,7 @@
 package com.tarsv2.codex;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tarsv2.model.*;
+import com.tarsv2.llm.ReasoningModelClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,20 +15,20 @@ public final class CodexOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final ModeRouter modeRouter;
+    private final ReasoningModelClient minimaxClient;
     private final Path sandboxRoot;
     private final DeterministicPatchBuilder patchBuilder;
 
-    public CodexOrchestrator(ModeRouter modeRouter) {
-        this(modeRouter, Path.of("."), new DeterministicPatchBuilder());
+    public CodexOrchestrator(ReasoningModelClient minimaxClient) {
+        this(minimaxClient, Path.of("."), new DeterministicPatchBuilder());
     }
 
-    public CodexOrchestrator(ModeRouter modeRouter, Path sandboxRoot) {
-        this(modeRouter, sandboxRoot, new DeterministicPatchBuilder());
+    public CodexOrchestrator(ReasoningModelClient minimaxClient, Path sandboxRoot) {
+        this(minimaxClient, sandboxRoot, new DeterministicPatchBuilder());
     }
 
-    CodexOrchestrator(ModeRouter modeRouter, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
-        this.modeRouter = Objects.requireNonNull(modeRouter);
+    CodexOrchestrator(ReasoningModelClient minimaxClient, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
+        this.minimaxClient = Objects.requireNonNull(minimaxClient);
         this.sandboxRoot = Objects.requireNonNull(sandboxRoot);
         this.patchBuilder = Objects.requireNonNull(patchBuilder);
     }
@@ -38,20 +38,14 @@ public final class CodexOrchestrator {
         String safeTask = requireTask(task);
         String originalContent = readFileFromSandbox(safeTargetFilePath);
 
-        ModelResponse response = modeRouter.route(
-                Mode.CODEX,
-                new ModelRequest(
-                        "You produce ONLY JSON objects describing file edits.",
-                        buildPrompt(safeTask, safeTargetFilePath, originalContent),
-                        true
-                )
+        String payload = minimaxClient.generateDeterministicDiff(
+                buildPrompt(safeTask, safeTargetFilePath, originalContent)
         );
-
-        if (response.status() != ModelResponse.Status.OK) {
-            throw new IllegalStateException("CODEX model failed: " + response.message());
+        if (payload.startsWith("[ERROR]")) {
+            throw new IllegalStateException("CODEX model failed: " + payload);
         }
 
-        ChangeRequest changeRequest = parseChangeRequest(response.content());
+        ChangeRequest changeRequest = parseChangeRequest(payload);
         String diff = patchBuilder.buildUnifiedDiff(safeTargetFilePath, originalContent, changeRequest);
         log.info("Deterministic diff generated for {} ({} chars)", safeTargetFilePath, diff.length());
         return diff;
@@ -66,7 +60,7 @@ public final class CodexOrchestrator {
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
-        return "You are a deterministic code change planner.\n"
+        return "You are a deterministic code change planner. Use temperature 0 semantics and produce stable output.\n"
                 + "Target file path:\n" + requireTargetFilePath(targetFilePath)
                 + "\n\nCurrent file contents:\n" + Objects.requireNonNull(fileContent)
                 + "\n\nTask:\n" + instruction
