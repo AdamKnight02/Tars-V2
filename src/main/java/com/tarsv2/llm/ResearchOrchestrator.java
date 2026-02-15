@@ -3,6 +3,10 @@ package com.tarsv2.llm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.tarsv2.model.ModelRequest;
+import com.tarsv2.model.ModelResponse;
+import com.tarsv2.model.router.ModelRouter;
+import com.tarsv2.model.router.RoutingMode;
 
 import java.util.LinkedHashSet;
 import java.util.Objects;
@@ -16,10 +20,18 @@ public final class ResearchOrchestrator {
     private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("LOW", "MODERATE", "HIGH");
 
     private final ReasoningModelClient glmClient;
+    private final ModelRouter modelRouter;
     private final RepositoryContextInjector repositoryContextInjector;
 
     public ResearchOrchestrator(ReasoningModelClient glmClient) {
         this.glmClient = Objects.requireNonNull(glmClient);
+        this.modelRouter = null;
+        this.repositoryContextInjector = new RepositoryContextInjector();
+    }
+
+    public ResearchOrchestrator(ModelRouter modelRouter) {
+        this.glmClient = null;
+        this.modelRouter = Objects.requireNonNull(modelRouter);
         this.repositoryContextInjector = new RepositoryContextInjector();
     }
 
@@ -30,9 +42,19 @@ public final class ResearchOrchestrator {
         }
 
         String prompt = repositoryContextInjector.inject(buildResearchPrompt(topic)).augmentedPrompt();
-        String raw = glmClient.chat(prompt);
-        if (raw.startsWith("[NOT_IMPLEMENTED]")) {
-            return "{\"error\":\"NOT_IMPLEMENTED\"}";
+        String raw;
+        if (modelRouter != null) {
+            ModelResponse routed = modelRouter.route(RoutingMode.RESEARCH,
+                    new ModelRequest("Research mode", prompt, true));
+            if (routed.status() == ModelResponse.Status.NOT_IMPLEMENTED) {
+                return "{\"error\":\"NOT_IMPLEMENTED\"}";
+            }
+            raw = routed.status() == ModelResponse.Status.OK ? routed.content() : "";
+        } else {
+            raw = glmClient.chat(prompt);
+            if (raw.startsWith("[NOT_IMPLEMENTED]")) {
+                return "{\"error\":\"NOT_IMPLEMENTED\"}";
+            }
         }
 
         JsonNode parsed = parseAndValidateResearchJson(raw);

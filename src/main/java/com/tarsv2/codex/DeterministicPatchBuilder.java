@@ -1,15 +1,17 @@
 package com.tarsv2.codex;
 
+import com.tarsv2.codex.instruction.PatchInstruction;
+import com.tarsv2.codex.instruction.PatchOperation;
 import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.dircache.DirCache;
 import org.eclipse.jgit.dircache.DirCacheBuilder;
 import org.eclipse.jgit.dircache.DirCacheEntry;
+import org.eclipse.jgit.internal.storage.dfs.DfsRepositoryDescription;
+import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectInserter;
-import org.eclipse.jgit.internal.storage.dfs.DfsRepositoryDescription;
-import org.eclipse.jgit.internal.storage.dfs.InMemoryRepository;
 import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 
@@ -22,10 +24,23 @@ public final class DeterministicPatchBuilder {
 
     public String buildUnifiedDiff(String targetFilePath, String originalContent, ChangeRequest request) throws IOException {
         String path = requirePath(targetFilePath);
-        String oldContent = Objects.requireNonNull(originalContent, "originalContent must not be null");
-        ChangeRequest safeRequest = Objects.requireNonNull(request, "change request is required");
+        PatchOperation operation = switch ((request.action() == null ? "" : request.action().trim().toLowerCase())) {
+            case "replace" -> PatchOperation.REPLACE;
+            case "append" -> PatchOperation.APPEND;
+            case "replace_hint" -> PatchOperation.REPLACE_HINT;
+            case "insert_after_hint" -> PatchOperation.INSERT_AFTER_HINT;
+            default -> throw new IllegalArgumentException("Unsupported change action: " + request.action());
+        };
+        PatchInstruction instruction = new PatchInstruction(path, operation, request.locationHint(), request.content());
+        return buildUnifiedDiff(path, originalContent, instruction);
+    }
 
-        String updatedContent = applyChange(oldContent, safeRequest);
+    public String buildUnifiedDiff(String targetFilePath, String originalContent, PatchInstruction instruction) throws IOException {
+        String path = requirePath(targetFilePath);
+        String oldContent = Objects.requireNonNull(originalContent, "originalContent must not be null");
+        PatchInstruction safeInstruction = Objects.requireNonNull(instruction, "patch instruction is required");
+
+        String updatedContent = applyInstruction(oldContent, safeInstruction);
         if (oldContent.equals(updatedContent)) {
             return "";
         }
@@ -33,21 +48,29 @@ public final class DeterministicPatchBuilder {
         return formatDiff(path, oldContent, updatedContent);
     }
 
-    String applyChange(String originalContent, ChangeRequest request) {
-        String action = request.action() == null ? "" : request.action().trim().toLowerCase();
-        String content = request.content();
-
-        if (content == null) {
-            throw new IllegalArgumentException("Change content is required.");
+    String applyInstruction(String originalContent, PatchInstruction instruction) {
+        if (instruction.content() == null) {
+            throw new IllegalArgumentException("Patch content is required.");
         }
 
-        return switch (action) {
-            case "replace" -> content;
-            case "append" -> append(originalContent, content);
-            case "replace_hint" -> replaceHint(originalContent, request.locationHint(), content);
-            case "insert_after_hint" -> insertAfterHint(originalContent, request.locationHint(), content);
+        return switch (instruction.operation()) {
+            case REPLACE -> instruction.content();
+            case APPEND -> append(originalContent, instruction.content());
+            case REPLACE_HINT -> replaceHint(originalContent, instruction.location(), instruction.content());
+            case INSERT_AFTER_HINT -> insertAfterHint(originalContent, instruction.location(), instruction.content());
+        };
+    }
+
+    String applyChange(String originalContent, ChangeRequest request) {
+        PatchOperation operation = switch ((request.action() == null ? "" : request.action().trim().toLowerCase())) {
+            case "replace" -> PatchOperation.REPLACE;
+            case "append" -> PatchOperation.APPEND;
+            case "replace_hint" -> PatchOperation.REPLACE_HINT;
+            case "insert_after_hint" -> PatchOperation.INSERT_AFTER_HINT;
             default -> throw new IllegalArgumentException("Unsupported change action: " + request.action());
         };
+        return applyInstruction(originalContent,
+                new PatchInstruction("src/main/java/placeholder.java", operation, request.locationHint(), request.content()));
     }
 
     private String append(String original, String content) {
@@ -59,22 +82,22 @@ public final class DeterministicPatchBuilder {
 
     private String replaceHint(String original, String locationHint, String content) {
         if (locationHint == null || locationHint.isBlank()) {
-            throw new IllegalArgumentException("locationHint is required for replace_hint action.");
+            throw new IllegalArgumentException("location is required for REPLACE_HINT operation.");
         }
         int idx = original.indexOf(locationHint);
         if (idx < 0) {
-            throw new IllegalArgumentException("locationHint not found for replace_hint action.");
+            throw new IllegalArgumentException("location not found for REPLACE_HINT operation.");
         }
         return original.substring(0, idx) + content + original.substring(idx + locationHint.length());
     }
 
     private String insertAfterHint(String original, String locationHint, String content) {
         if (locationHint == null || locationHint.isBlank()) {
-            throw new IllegalArgumentException("locationHint is required for insert_after_hint action.");
+            throw new IllegalArgumentException("location is required for INSERT_AFTER_HINT operation.");
         }
         int idx = original.indexOf(locationHint);
         if (idx < 0) {
-            throw new IllegalArgumentException("locationHint not found for insert_after_hint action.");
+            throw new IllegalArgumentException("location not found for INSERT_AFTER_HINT operation.");
         }
         int insertionPoint = idx + locationHint.length();
         return original.substring(0, insertionPoint) + content + original.substring(insertionPoint);
