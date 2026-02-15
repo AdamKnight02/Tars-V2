@@ -1,76 +1,113 @@
 package com.tarsv2.codex;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tarsv2.codex.instruction.PatchInstruction;
+import com.tarsv2.codex.instruction.PatchInstructionParser;
 import com.tarsv2.llm.ReasoningModelClient;
+import com.tarsv2.model.ModelRequest;
+import com.tarsv2.model.ModelResponse;
+import com.tarsv2.model.TarsModel;
+import com.tarsv2.model.config.ModelConfig;
+import com.tarsv2.model.config.ModeBindings;
+import com.tarsv2.model.router.DefaultModelRouter;
+import com.tarsv2.model.router.ModelRouter;
+import com.tarsv2.model.router.RoutingMode;
+import com.tarsv2.tool.diff.DiffToolFacade;
+import com.tarsv2.tool.git.GitToolFacade;
+import com.tarsv2.tool.sandbox.SandboxToolFacade;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Objects;
 
 public final class CodexOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(CodexOrchestrator.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private final ReasoningModelClient minimaxClient;
-    private final Path sandboxRoot;
-    private final DeterministicPatchBuilder patchBuilder;
+    private final ModelRouter modelRouter;
+    private final SandboxToolFacade sandboxTool;
+    private final DiffToolFacade diffTool;
+    private final GitToolFacade gitTool;
+    private final PatchInstructionParser parser;
+    private final PatchValidator patchValidator;
 
     public CodexOrchestrator(ReasoningModelClient minimaxClient) {
-        this(minimaxClient, Path.of("."), new DeterministicPatchBuilder());
+        this(minimaxClient, Path.of("."));
     }
 
     public CodexOrchestrator(ReasoningModelClient minimaxClient, Path sandboxRoot) {
-        this(minimaxClient, sandboxRoot, new DeterministicPatchBuilder());
+        this(buildRouter(minimaxClient), sandboxRoot, new DeterministicPatchBuilder(), new PatchValidator());
     }
 
-    CodexOrchestrator(ReasoningModelClient minimaxClient, Path sandboxRoot, DeterministicPatchBuilder patchBuilder) {
-        this.minimaxClient = Objects.requireNonNull(minimaxClient);
-        this.sandboxRoot = Objects.requireNonNull(sandboxRoot);
-        this.patchBuilder = Objects.requireNonNull(patchBuilder);
+    public CodexOrchestrator(ModelRouter modelRouter, Path sandboxRoot) {
+        this(modelRouter, sandboxRoot, new DeterministicPatchBuilder(), new PatchValidator());
+    }
+
+    CodexOrchestrator(ModelRouter modelRouter,
+                      Path sandboxRoot,
+                      DeterministicPatchBuilder patchBuilder,
+                      PatchValidator patchValidator) {
+        this.modelRouter = Objects.requireNonNull(modelRouter);
+        this.sandboxTool = new SandboxToolFacade(Objects.requireNonNull(sandboxRoot));
+        this.diffTool = new DiffToolFacade(Objects.requireNonNull(patchBuilder));
+        this.patchValidator = Objects.requireNonNull(patchValidator);
+        this.gitTool = new GitToolFacade(patchValidator);
+        this.parser = new PatchInstructionParser();
     }
 
     public String generateDiffOnly(String targetFilePath, String task) throws IOException {
         String safeTargetFilePath = requireTargetFilePath(targetFilePath);
         String safeTask = requireTask(task);
-        String originalContent = readFileFromSandbox(safeTargetFilePath);
+        String originalContent = sandboxTool.readFile(safeTargetFilePath);
 
-        String payload = minimaxClient.generateDeterministicDiff(
-                buildPrompt(safeTask, safeTargetFilePath, originalContent)
-        );
-        if (payload.startsWith("[ERROR]")) {
-            throw new IllegalStateException("CODEX model failed: " + payload);
+        ModelResponse response = modelRouter.route(RoutingMode.CODEX,
+                new ModelRequest("Deterministic patch planner", buildPrompt(safeTask, safeTargetFilePath, originalContent), true));
+        if (response.status() != ModelResponse.Status.OK) {
+            throw new IllegalStateException("CODEX model failed: " + response.message());
         }
 
-        ChangeRequest changeRequest = parseChangeRequest(payload);
-        String diff = patchBuilder.buildUnifiedDiff(safeTargetFilePath, originalContent, changeRequest);
+        PatchInstruction instruction = parser.parse(response.content());
+        PatchValidator.ValidationResult instructionValidation = patchValidator.validateInstruction(instruction);
+        if (!instructionValidation.valid()) {
+            throw new IllegalArgumentException("Patch instruction rejected: " + instructionValidation.message());
+        }
+
+        String diff = diffTool.buildUnifiedDiff(safeTargetFilePath, originalContent, instruction);
+        PatchValidator.ValidationResult diffValidation = gitTool.validateForApply(diff);
+        if (!diffValidation.valid()) {
+            throw new IllegalArgumentException("Patch diff rejected: " + diffValidation.message());
+        }
+
         log.info("Deterministic diff generated for {} ({} chars)", safeTargetFilePath, diff.length());
         return diff;
     }
 
-    private ChangeRequest parseChangeRequest(String structuredJson) {
-        try {
-            return MAPPER.readValue(structuredJson, ChangeRequest.class);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("LLM returned invalid change JSON.", e);
-        }
+    private static ModelRouter buildRouter(ReasoningModelClient minimaxClient) {
+        TarsModel m25 = request -> {
+            String raw = minimaxClient.generateDeterministicDiff(request.userPrompt());
+            if (raw == null || raw.startsWith("[ERROR]")) {
+                return ModelResponse.unavailable(raw == null ? "MiniMax unavailable" : raw);
+            }
+            return ModelResponse.ok(raw);
+        };
+
+        ModelConfig base = ModelConfig.fromEnvironment();
+        ModelConfig config = new ModelConfig(new ModeBindings(base.bindings().chatModel(), "m2.5", base.bindings().researchModel()),
+                base.profiles(),
+                base.providers());
+
+        return new DefaultModelRouter(config, Map.of("m2.5", m25));
     }
 
     private String buildPrompt(String instruction, String targetFilePath, String fileContent) {
-        return "You are a deterministic code change planner. Use temperature 0 semantics and produce stable output.\n"
+        return "Return JSON only in this exact schema: "
+                + "{\"file\":string,\"operation\":\"REPLACE|APPEND|REPLACE_HINT|INSERT_AFTER_HINT\",\"location\":string,\"content\":string}.\n"
                 + "Target file path:\n" + requireTargetFilePath(targetFilePath)
                 + "\n\nCurrent file contents:\n" + Objects.requireNonNull(fileContent)
                 + "\n\nTask:\n" + instruction
-                + "\n\nReturn ONLY valid JSON with this shape:\n"
-                + "{\n"
-                + "  \"action\": \"<action identifier>\",\n"
-                + "  \"locationHint\": \"<context hint>\",\n"
-                + "  \"content\": \"<inserted or replacement text>\"\n"
-                + "}\n"
-                + "Do not return markdown. Do not return a unified diff.";
+                + "\nDo not return markdown and do not return a unified diff.";
     }
 
     private String requireTask(String task) {
@@ -85,24 +122,5 @@ public final class CodexOrchestrator {
             throw new IllegalArgumentException("Target file path is required for deterministic diff generation.");
         }
         return targetFilePath;
-    }
-
-    private String readFileFromSandbox(String targetFilePath) {
-        Path filePath = sandboxRoot.resolve(targetFilePath).normalize();
-        Path normalizedRoot = sandboxRoot.toAbsolutePath().normalize();
-        Path absoluteFile = filePath.toAbsolutePath().normalize();
-
-        if (!absoluteFile.startsWith(normalizedRoot)) {
-            throw new IllegalArgumentException("Target file path escapes sandbox root.");
-        }
-
-        if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
-            throw new IllegalArgumentException("Target file not found in sandbox: " + targetFilePath);
-        }
-        try {
-            return Files.readString(filePath);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to read sandbox file: " + targetFilePath, e);
-        }
     }
 }

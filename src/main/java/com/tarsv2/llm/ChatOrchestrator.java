@@ -2,12 +2,17 @@ package com.tarsv2.llm;
 
 import com.tarsv2.context.ContextBudget;
 import com.tarsv2.context.ContextSummarizer;
+import com.tarsv2.model.ModelRequest;
+import com.tarsv2.model.ModelResponse;
+import com.tarsv2.model.router.ModelRouter;
+import com.tarsv2.model.router.RoutingMode;
 
 import java.util.Objects;
 
 public final class ChatOrchestrator {
 
     private final ReasoningModelClient minimaxClient;
+    private final ModelRouter modelRouter;
     private final ContextSummarizer contextSummarizer;
     private final ContextBudget contextBudget;
 
@@ -17,6 +22,18 @@ public final class ChatOrchestrator {
             ContextBudget contextBudget
     ) {
         this.minimaxClient = Objects.requireNonNull(minimaxClient);
+        this.modelRouter = null;
+        this.contextSummarizer = Objects.requireNonNull(contextSummarizer);
+        this.contextBudget = Objects.requireNonNull(contextBudget);
+    }
+
+    public ChatOrchestrator(
+            ModelRouter modelRouter,
+            ContextSummarizer contextSummarizer,
+            ContextBudget contextBudget
+    ) {
+        this.minimaxClient = null;
+        this.modelRouter = Objects.requireNonNull(modelRouter);
         this.contextSummarizer = Objects.requireNonNull(contextSummarizer);
         this.contextBudget = Objects.requireNonNull(contextBudget);
     }
@@ -32,7 +49,14 @@ public final class ChatOrchestrator {
             prompt = contextSummarizer.fitToBudget(prompt, contextBudget);
         }
 
-        String response = minimaxClient.chat(prompt);
+        String response;
+        if (modelRouter != null) {
+            ModelResponse routed = modelRouter.route(RoutingMode.CHAT,
+                    new ModelRequest("Minimal chat mode", prompt, false));
+            response = routed.status() == ModelResponse.Status.OK ? routed.content() : "[ERROR] " + routed.message();
+        } else {
+            response = minimaxClient.chat(prompt);
+        }
         return response.startsWith("[ERROR]") ? "Chat model unavailable: " + response : response;
     }
 }
