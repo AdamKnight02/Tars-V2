@@ -18,6 +18,11 @@ import com.tarsv2.codex.PatchValidator;
 import com.tarsv2.memory.MemorySystem;
 import com.tarsv2.metrics.ObservationMetrics;
 import com.tarsv2.model.*;
+import com.tarsv2.model.config.ModelConfig;
+import com.tarsv2.model.router.DefaultModelRouter;
+import com.tarsv2.model.router.ModelRouter;
+import com.tarsv2.workforce.WorkforceBootstrap;
+import com.tarsv2.workforce.orchestration.WorkforceManager;
 import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
@@ -43,6 +48,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
 
@@ -108,6 +114,8 @@ public final class TarsCli implements Runnable {
 
     @Option(names = {"--task"}, description = "Task prompt for Codex diff generation")
     private String task;
+
+    private WorkforceManager workforceManager;
 
     /**
      * Main entry point.
@@ -175,6 +183,11 @@ public final class TarsCli implements Runnable {
         ModelRegistry modelRegistry = ModelRegistry.fromEnvironment();
         MinimaxClient minimaxClient = new MinimaxClient(minimaxUrl, minimaxModel, modelRegistry.modelTimeout());
         ReasoningModelClient glmClient = new GlmClient();
+        ModelRouter modelRouter = new DefaultModelRouter(ModelConfig.fromEnvironment(), Map.of(
+                "m2.5", request -> ModelResponse.ok(minimaxClient.generateDeterministicDiff(request.userPrompt())),
+                "minimax-chat", request -> ModelResponse.ok(minimaxClient.chat(request.userPrompt())),
+                "glm-research", request -> ModelResponse.ok(glmClient.chat(request.userPrompt()))
+        ));
         SingleModelOrchestrator orchestrator = new SingleModelOrchestrator(minimaxClient, dialogue);
 
         // ── Metrics & Learning ──────────────────────────────────
@@ -277,7 +290,7 @@ public final class TarsCli implements Runnable {
                 scraperTokenHandle, webServer, vscodeConnector,
                 auditLog, memorySystem, chunkLearning, sudoManager,
                 envRegistry, openClaw, contextBudget, chatOrchestrator, researchOrchestrator,
-                codexOrchestrator, patchValidator, sandboxGitService, proposalRegistry);
+                codexOrchestrator, patchValidator, sandboxGitService, proposalRegistry, modelRouter);
     }
 
     /**
@@ -309,7 +322,8 @@ public final class TarsCli implements Runnable {
             CodexOrchestrator codexOrchestrator,
             PatchValidator patchValidator,
             SandboxGitService sandboxGitService,
-            ProposalRegistry proposalRegistry
+            ProposalRegistry proposalRegistry,
+            ModelRouter modelRouter
     ) {
         Scanner scanner = new Scanner(System.in);
         while (true) {
@@ -350,6 +364,7 @@ public final class TarsCli implements Runnable {
                     dialogue.say("Shutting down. It's been real.", DialogueStyle.OutputMode.CHAT);
                     if (webServer != null) webServer.stop();
                     if (vscodeConnector != null) vscodeConnector.stop();
+                    if (workforceManager != null) workforceManager.shutdown();
                     return;
                 }
                 case "help" -> printHelp(dialogue);
@@ -466,8 +481,42 @@ public final class TarsCli implements Runnable {
                         }
                     }
                 }
+                case "workforce" -> {
+                    if (workforceManager == null) {
+                        dialogue.say("Initializing Workforce OS...", DialogueStyle.OutputMode.SYSTEM);
+                        try {
+                            workforceManager = WorkforceBootstrap.initialize(
+                                    modelRouter, codexOrchestrator, researchOrchestrator, chatOrchestrator,
+                                    approvalGate, proposalRegistry, patchValidator
+                            );
+                            workforceManager.start();
+                            dialogue.say("Workforce OS online. Use 'goal <description>' to submit work.", DialogueStyle.OutputMode.SYSTEM);
+                        } catch (Exception e) {
+                            dialogue.say("Workforce init failed: " + e.getMessage(), DialogueStyle.OutputMode.SYSTEM);
+                            log.error("Workforce bootstrap failed", e);
+                        }
+                    } else {
+                        dialogue.say(workforceManager.getStatus().toString(), DialogueStyle.OutputMode.SYSTEM);
+                    }
+                }
+                case "economics" -> {
+                    if (workforceManager == null) {
+                        dialogue.say("Workforce not started. Run 'workforce' first.", DialogueStyle.OutputMode.SYSTEM);
+                    } else {
+                        dialogue.say(workforceManager.getEconomicSnapshot().toString(), DialogueStyle.OutputMode.SYSTEM);
+                    }
+                }
                 default -> {
-                    if (input.startsWith("approve ")) {
+                    if (lowered.startsWith("goal ")) {
+                        if (workforceManager == null) {
+                            dialogue.say("Workforce not started. Run 'workforce' first.", DialogueStyle.OutputMode.SYSTEM);
+                        } else {
+                            String goalText = input.substring("goal ".length()).trim();
+                            dialogue.say("Submitting goal: " + goalText, DialogueStyle.OutputMode.SYSTEM);
+                            workforceManager.submitGoal(goalText);
+                            dialogue.say("Goal decomposed and tasks queued.", DialogueStyle.OutputMode.SYSTEM);
+                        }
+                    } else if (input.startsWith("approve ")) {
                         String id = input.substring(8).trim();
                         java.util.UUID uuid;
                         try {
@@ -652,6 +701,9 @@ public final class TarsCli implements Runnable {
         dialogue.say("  propose <topic>   — Create a pending proposal from structured Actor output", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  research <topic>  — Return deterministic JSON research proposal", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  codex <topic>     — Generate diff-only codex proposal", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  workforce         — Initialize/show Workforce OS status", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  goal <text>       — Submit a workforce goal for decomposition", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  economics         — Show workforce economics snapshot", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  reject <id>       — Reject a proposal", DialogueStyle.OutputMode.CHAT);
