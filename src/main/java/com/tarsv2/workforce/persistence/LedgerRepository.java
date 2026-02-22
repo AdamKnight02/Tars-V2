@@ -20,9 +20,9 @@ public interface LedgerRepository {
 
     List<RevenueLedger> findAllRevenue();
 
-    List<CostLedger> findByTaskId(UUID taskId);
+    List<CostLedger> findCostsByTaskId(UUID taskId);
 
-    List<RevenueLedger> findByTaskId(UUID taskId);
+    List<RevenueLedger> findRevenuesByTaskId(UUID taskId);
 
     void update(CostLedger entity);
 
