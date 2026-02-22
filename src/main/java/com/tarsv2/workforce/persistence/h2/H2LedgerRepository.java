@@ -38,8 +38,8 @@ public final class H2LedgerRepository implements LedgerRepository {
     @Override public Optional<RevenueLedger> findRevenueById(UUID id) { return findRevenue("SELECT * FROM revenue_ledger WHERE id=?", id); }
     @Override public List<CostLedger> findAllCosts() { return findCosts("SELECT * FROM cost_ledger"); }
     @Override public List<RevenueLedger> findAllRevenue() { return findRevenues("SELECT * FROM revenue_ledger"); }
-    @Override public List<CostLedger> findByTaskId(UUID taskId) { return findCosts("SELECT * FROM cost_ledger WHERE task_id=?", taskId); }
-    @Override public List<RevenueLedger> findByTaskId(UUID taskId) { return findRevenues("SELECT * FROM revenue_ledger WHERE task_id=?", taskId); }
+    @Override public List<CostLedger> findCostsByTaskId(UUID taskId) { return findCosts("SELECT * FROM cost_ledger WHERE task_id=?", taskId); }
+    @Override public List<RevenueLedger> findRevenuesByTaskId(UUID taskId) { return findRevenues("SELECT * FROM revenue_ledger WHERE task_id=?", taskId); }
 
     @Override public void update(CostLedger e) { deleteCost(e.id()); save(e); }
     @Override public void update(RevenueLedger e) { deleteRevenue(e.id()); save(e); }
