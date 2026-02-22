@@ -1,6 +1,7 @@
 package com.tarsv2.workforce.agent;
 
 import com.tarsv2.model.ModelRequest;
+import com.tarsv2.model.ModelResponse;
 import com.tarsv2.model.router.ModelRouter;
 import com.tarsv2.model.router.RoutingMode;
 import com.tarsv2.workforce.economics.CostEstimator;
@@ -31,7 +32,7 @@ public final class SalesAgent implements WorkforceAgent {
                 "You are a sales strategist.",
                 "Evaluate this opportunity and return JSON with viabilityScore(0-100), estimatedEffort, recommendedApproach: " + task.description(),
                 true));
-        return new TaskResult(task.id(), response.status().name().equals("OK"), response.content(), response.message(), Instant.now(), 0, 0, "GLM-4.7");
+        return new TaskResult(task.id(), response.status() == ModelResponse.Status.OK, response.content(), response.message(), Instant.now(), 0, 0, "MiniMax-M2.5");
     }
 
     @Override

@@ -25,9 +25,8 @@ public final class CostEstimator {
 
     private String modelFor(AgentRole role) {
         return switch (role) {
-            case ENGINEER -> "MiniMax-M2.5";
+            case ENGINEER, SALES -> "MiniMax-M2.5";
             case RESEARCHER, FINANCE -> "GLM-5";
-            case SALES -> "GLM-4.7";
         };
     }
 
