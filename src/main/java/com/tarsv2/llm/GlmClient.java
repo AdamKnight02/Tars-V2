@@ -79,14 +79,32 @@ public final class GlmClient implements ReasoningModelClient {
                 String raw = body != null ? body.string() : "";
                 if (!response.isSuccessful()) {
                     log.warn("GLM API returned HTTP {}: {}", response.code(), raw);
+                    if (isModelUnavailable(response.code(), raw)) {
+                        return "[NOT_IMPLEMENTED] Research model unavailable";
+                    }
                     throw new IllegalStateException("GLM API returned HTTP " + response.code() + ": " + raw);
                 }
                 return parseContent(raw);
             }
         } catch (Exception e) {
+            if (isModelUnavailable(e.getMessage())) {
+                log.warn("GLM call unavailable: {}", e.getMessage());
+                return "[NOT_IMPLEMENTED] Research model unavailable";
+            }
             log.warn("GLM call failed: {}", e.getMessage());
             return "[ERROR] " + e.getMessage();
         }
+    }
+
+    private boolean isModelUnavailable(int statusCode, String rawBody) {
+        return statusCode == 429 && rawBody != null && rawBody.contains("\"code\":\"1113\"");
+    }
+
+    private boolean isModelUnavailable(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return message.contains("Missing GLM API key") || message.contains("HTTP 429") && message.contains("\"code\":\"1113\"");
     }
 
     private String parseContent(String rawJson) {
