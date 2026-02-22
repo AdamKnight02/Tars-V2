@@ -3,9 +3,12 @@ package com.tarsv2.workforce.orchestration;
 import com.tarsv2.workforce.economics.EconomicEngine;
 import com.tarsv2.workforce.planning.GoalDecomposition;
 import com.tarsv2.workforce.planning.PlanningEngine;
+import com.tarsv2.workforce.revenue.Opportunity;
+import com.tarsv2.workforce.revenue.OpportunityScanner;
 import com.tarsv2.workforce.scheduler.WorkforceScheduler;
 import com.tarsv2.workforce.task.TaskQueue;
 
+import java.util.List;
 import java.util.Objects;
 
 public final class WorkforceManager {
@@ -15,17 +18,20 @@ public final class WorkforceManager {
     private final PlanningEngine planningEngine;
     private final EconomicEngine economicEngine;
     private final WorkforceScheduler scheduler;
+    private final OpportunityScanner opportunityScanner;
 
     public WorkforceManager(TaskQueue taskQueue,
                             AgentDispatcher dispatcher,
                             PlanningEngine planningEngine,
                             EconomicEngine economicEngine,
-                            WorkforceScheduler scheduler) {
+                            WorkforceScheduler scheduler,
+                            OpportunityScanner opportunityScanner) {
         this.taskQueue = Objects.requireNonNull(taskQueue);
         this.dispatcher = Objects.requireNonNull(dispatcher);
         this.planningEngine = Objects.requireNonNull(planningEngine);
         this.economicEngine = Objects.requireNonNull(economicEngine);
         this.scheduler = Objects.requireNonNull(scheduler);
+        this.opportunityScanner = Objects.requireNonNull(opportunityScanner);
     }
 
     public void submitGoal(String goal) {
@@ -47,5 +53,9 @@ public final class WorkforceManager {
 
     public EconomicEngine.EconomicSnapshot getEconomicSnapshot() {
         return economicEngine.getSnapshot();
+    }
+
+    public List<Opportunity> scanOpportunities(String domain) {
+        return opportunityScanner.scan(domain);
     }
 }

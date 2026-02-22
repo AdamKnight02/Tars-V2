@@ -506,6 +506,16 @@ public final class TarsCli implements Runnable {
                         dialogue.say(workforceManager.getEconomicSnapshot().toString(), DialogueStyle.OutputMode.SYSTEM);
                     }
                 }
+                case "scan" -> {
+                    if (workforceManager == null) {
+                        dialogue.say("Workforce not started. Run 'workforce' first.", DialogueStyle.OutputMode.SYSTEM);
+                    } else {
+                        String domain = input.length() > 5 ? input.substring(5).trim() : "freelance software development";
+                        var opportunities = workforceManager.scanOpportunities(domain);
+                        dialogue.say("Found " + opportunities.size() + " opportunities.", DialogueStyle.OutputMode.SYSTEM);
+                        opportunities.forEach(o -> dialogue.say("  " + o.title() + " — $" + o.estimatedValue(), DialogueStyle.OutputMode.SYSTEM));
+                    }
+                }
                 default -> {
                     if (lowered.startsWith("goal ")) {
                         if (workforceManager == null) {
@@ -704,6 +714,7 @@ public final class TarsCli implements Runnable {
         dialogue.say("  workforce         — Initialize/show Workforce OS status", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  goal <text>       — Submit a workforce goal for decomposition", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  economics         — Show workforce economics snapshot", DialogueStyle.OutputMode.SYSTEM);
+        dialogue.say("  scan <domain>     — Scan for revenue opportunities", DialogueStyle.OutputMode.SYSTEM);
         dialogue.say("  proposals         — List pending change proposals", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  approve <id>      — Approve a proposal", DialogueStyle.OutputMode.CHAT);
         dialogue.say("  reject <id>       — Reject a proposal", DialogueStyle.OutputMode.CHAT);

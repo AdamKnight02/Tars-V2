@@ -17,6 +17,7 @@ import com.tarsv2.workforce.persistence.h2.H2OpportunityRepository;
 import com.tarsv2.workforce.persistence.h2.H2TaskRepository;
 import com.tarsv2.workforce.planning.PlanningConstraints;
 import com.tarsv2.workforce.planning.PlanningEngine;
+import com.tarsv2.workforce.revenue.OpportunityScanner;
 import com.tarsv2.workforce.scheduler.*;
 import com.tarsv2.workforce.task.TaskQueue;
 
@@ -62,7 +63,8 @@ public final class WorkforceBootstrap {
         ExecutionGuard guard = new ExecutionGuard();
         SchedulerConfig schedulerConfig = SchedulerConfig.defaults();
         WorkforceScheduler scheduler = new WorkforceScheduler(queue, dispatcher, economicEngine, taskRepository, guard, schedulerConfig);
+        OpportunityScanner opportunityScanner = new OpportunityScanner(modelRouter);
 
-        return new WorkforceManager(queue, dispatcher, planningEngine, economicEngine, scheduler);
+        return new WorkforceManager(queue, dispatcher, planningEngine, economicEngine, scheduler, opportunityScanner);
     }
 }

@@ -1,6 +1,7 @@
 package com.tarsv2.workforce.agent;
 
 import com.tarsv2.model.ModelRequest;
+import com.tarsv2.model.ModelResponse;
 import com.tarsv2.model.router.ModelRouter;
 import com.tarsv2.model.router.RoutingMode;
 import com.tarsv2.workforce.economics.CostEstimator;
@@ -35,7 +36,7 @@ public final class FinanceAgent implements WorkforceAgent {
                 "You are a finance analyst.",
                 "Analyze this task with current economics and return JSON recommendations. Task: " + task.description() + " Snapshot: " + snapshot,
                 true));
-        return new TaskResult(task.id(), response.status().name().equals("OK"), response.content(), response.message(), Instant.now(), 0, 0, "GLM-5");
+        return new TaskResult(task.id(), response.status() == ModelResponse.Status.OK, response.content(), response.message(), Instant.now(), 0, 0, "GLM-5");
     }
 
     @Override
