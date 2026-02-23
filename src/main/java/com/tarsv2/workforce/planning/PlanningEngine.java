@@ -53,7 +53,11 @@ public final class PlanningEngine {
                 break;
             }
             try {
-                String raw = response.output().getOrDefault("content", "[]").trim();
+                String content = response.output();
+                if (content == null || content.isBlank()) {
+                    content = "[]";
+                }
+                String raw = content.trim();
                 if (raw.isBlank()) {
                     break;
                 }
