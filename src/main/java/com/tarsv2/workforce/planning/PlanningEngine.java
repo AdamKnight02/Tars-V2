@@ -43,6 +43,8 @@ public final class PlanningEngine {
                     "You are a planning engine.",
                     "Decompose goal into JSON array with fields title, description, role, priority, estimatedRevenue. Goal: " + goal,
                     true));
+            log.debug("Planning model response status: {}, content preview: {}",
+                    response.status(), response.content().substring(0, Math.min(500, response.content().length())));
             if (response.status() != ModelResponse.Status.OK) {
                 break;
             }
