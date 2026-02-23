@@ -641,12 +641,13 @@ public final class TarsCli implements Runnable {
                         proposalRegistry.submit(proposal, validation.referencedFiles(), validation.message());
                         dialogue.say("Proposal created with ID: " + proposal.getId() + ". Awaiting approval.", DialogueStyle.OutputMode.CHAT);
                     } else if (input.startsWith("research ")) {
-                        String topic = input.substring("research ".length()).trim();
-                        if (topic.startsWith("\"") && topic.endsWith("\"") && topic.length() >= 2) {
-                            topic = topic.substring(1, topic.length() - 1);
+                        try {
+                            String topic = validatedResearchTopic(input.substring("research ".length()));
+                            String researchJson = researchOrchestrator.research(topic);
+                            System.out.println(researchJson);
+                        } catch (IllegalArgumentException ex) {
+                            System.out.println("[research] Friendly error: " + ex.getMessage());
                         }
-                        String researchJson = researchOrchestrator.research(topic);
-                        System.out.println(researchJson);
                     } else if (!input.isEmpty()) {
                         String reply = chatOrchestrator.chat(input);
                         System.out.println("[TARS] " + reply);
@@ -669,6 +670,25 @@ public final class TarsCli implements Runnable {
             System.out.println("[codex] Sorry, something went wrong while generating the diff.");
             log.error("Codex diff mode failed", e);
         }
+    }
+
+
+    private String validatedResearchTopic(String rawInput) {
+        String trimmed = rawInput == null ? "" : rawInput.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("missing research query. Run with research \"<topic>\".");
+        }
+        boolean starts = trimmed.startsWith("\"");
+        boolean ends = trimmed.endsWith("\"");
+        if (starts ^ ends) {
+            throw new IllegalArgumentException("malformed quoted query: ensure quotes are properly closed.");
+        }
+        String topic = (starts && trimmed.length() >= 2) ? trimmed.substring(1, trimmed.length() - 1) : trimmed;
+        topic = topic.trim();
+        if (topic.isEmpty()) {
+            throw new IllegalArgumentException("research query must not be empty.");
+        }
+        return topic;
     }
 
     private String validatedCodexPath(String filePath) {
