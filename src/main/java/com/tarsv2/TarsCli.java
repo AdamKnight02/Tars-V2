@@ -225,7 +225,7 @@ public final class TarsCli implements Runnable {
         // ── Environment Registry (ALE-style) ────────────────────
         EnvironmentRegistry envRegistry = new EnvironmentRegistry();
         SandboxDispatcher sandboxDispatcher = new SandboxDispatcher(sandbox, approvalGate);
-        LLMDispatcher llmDispatcher = new LLMDispatcher();
+        LLMDispatcher llmDispatcher = new LLMDispatcher(modelRouter);
         CompositeDispatcher compositeDispatcher = new CompositeDispatcher(llmDispatcher, sandboxDispatcher);
         EnvironmentFactory.registerAll(envRegistry, compositeDispatcher);
         dialogue.say("Environments: " + envRegistry.size() + " registered (ALE-pinned).", DialogueStyle.OutputMode.CHAT);
