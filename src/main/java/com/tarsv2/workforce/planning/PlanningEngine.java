@@ -35,6 +35,7 @@ public final class PlanningEngine {
     }
 
     public GoalDecomposition plan(String goal) {
+        System.out.println("=== PLANNING ENGINE START === goal: " + goal);
         int calls = 0;
         List<Task> tasks = new ArrayList<>();
         while (calls < constraints.maxPlanningCallsPerGoal()) {
@@ -43,8 +44,12 @@ public final class PlanningEngine {
                     "You are a planning engine.",
                     "Decompose goal into JSON array with fields title, description, role, priority, estimatedRevenue. Goal: " + goal,
                     true));
+            System.out.println("=== PLANNING RESPONSE status=" + response.status() + " contentLength=" + (response.content() == null ? "null" : response.content().length()));
+            if (response.content() != null) {
+                System.out.println("=== FIRST 300 CHARS: " + response.content().substring(0, Math.min(300, response.content().length())));
+            }
             log.debug("Planning model response status: {}, content preview: {}",
-                    response.status(), response.content().substring(0, Math.min(500, response.content().length())));
+                    response.status(), response.content() == null ? null : response.content().substring(0, Math.min(500, response.content().length())));
             if (response.status() != ModelResponse.Status.OK) {
                 break;
             }
@@ -82,6 +87,7 @@ public final class PlanningEngine {
                 }
                 break;
             } catch (Exception e) {
+                System.out.println("=== PARSE FAILED: " + e.getMessage());
                 log.error("Failed to parse planning response", e);
                 log.error("Raw response was: {}", response.content().substring(0, Math.min(500, response.content().length())));
                 return new GoalDecomposition(goal, List.of(), Instant.now(), calls);
