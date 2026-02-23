@@ -8,6 +8,15 @@ package com.tarsv2.openclaw;
  */
 public enum IntentType {
 
+    /** Perform reasoning/planning using LLM backends. */
+    REASON,
+
+    /** Evaluate a task/opportunity using LLM backends. */
+    EVALUATE,
+
+    /** Analyze code or architecture using LLM backends. */
+    ANALYZE_CODE,
+
     /** Read a file from the working environment. */
     READ_FILE,
 

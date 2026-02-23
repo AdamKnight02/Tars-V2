@@ -7,8 +7,11 @@ import com.tarsv2.codex.PatchValidator;
 import com.tarsv2.llm.ChatOrchestrator;
 import com.tarsv2.llm.ResearchOrchestrator;
 import com.tarsv2.model.router.ModelRouter;
+import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.workforce.agent.*;
 import com.tarsv2.workforce.economics.*;
+import com.tarsv2.workforce.exploration.ExplorationConfig;
+import com.tarsv2.workforce.exploration.ExplorationEngine;
 import com.tarsv2.workforce.orchestration.AgentDispatcher;
 import com.tarsv2.workforce.orchestration.WorkforceManager;
 import com.tarsv2.workforce.persistence.DatabaseManager;
@@ -32,7 +35,8 @@ public final class WorkforceBootstrap {
                                               ChatOrchestrator chatOrchestrator,
                                               ApprovalGate approvalGate,
                                               ProposalRegistry proposalRegistry,
-                                              PatchValidator patchValidator) {
+                                              PatchValidator patchValidator,
+                                              OpenClawClient openClawClient) {
         DatabaseManager db = new DatabaseManager();
         db.initialize();
 
@@ -47,10 +51,10 @@ public final class WorkforceBootstrap {
 
         TaskQueue queue = new TaskQueue(taskRepository);
 
-        EngineerAgent engineerAgent = new EngineerAgent(codexOrchestrator, patchValidator, proposalRegistry, costEstimator);
-        ResearchAgent researchAgent = new ResearchAgent(researchOrchestrator, costEstimator);
-        SalesAgent salesAgent = new SalesAgent(modelRouter, costEstimator);
-        FinanceAgent financeAgent = new FinanceAgent(modelRouter, economicEngine, costEstimator);
+        EngineerAgent engineerAgent = new EngineerAgent(costEstimator);
+        ResearchAgent researchAgent = new ResearchAgent(costEstimator);
+        SalesAgent salesAgent = new SalesAgent(costEstimator);
+        FinanceAgent financeAgent = new FinanceAgent(economicEngine, costEstimator);
 
         AgentDispatcher dispatcher = new AgentDispatcher();
         dispatcher.register(engineerAgent);
@@ -58,11 +62,12 @@ public final class WorkforceBootstrap {
         dispatcher.register(salesAgent);
         dispatcher.register(financeAgent);
 
-        PlanningEngine planningEngine = new PlanningEngine(modelRouter, PlanningConstraints.defaults(), costEstimator);
+        PlanningEngine planningEngine = new PlanningEngine(openClawClient, PlanningConstraints.defaults(), costEstimator);
 
         ExecutionGuard guard = new ExecutionGuard();
         SchedulerConfig schedulerConfig = SchedulerConfig.defaults();
-        WorkforceScheduler scheduler = new WorkforceScheduler(queue, dispatcher, economicEngine, taskRepository, guard, schedulerConfig);
+        ExplorationEngine explorationEngine = new ExplorationEngine(ExplorationConfig.defaults(), economicEngine, costEstimator);
+        WorkforceScheduler scheduler = new WorkforceScheduler(queue, dispatcher, economicEngine, openClawClient, explorationEngine, taskRepository, guard, schedulerConfig);
         OpportunityScanner opportunityScanner = new OpportunityScanner(modelRouter);
 
         return new WorkforceManager(queue, dispatcher, planningEngine, economicEngine, scheduler, opportunityScanner);
