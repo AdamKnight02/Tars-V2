@@ -42,7 +42,14 @@ public final class PlanningEngine {
             calls++;
             ModelResponse response = modelRouter.route(RoutingMode.RESEARCH, new ModelRequest(
                     "You are a planning engine.",
-                    "Decompose goal into JSON array with fields title, description, role, priority, estimatedRevenue. Goal: " + goal,
+                    "Decompose this goal into a JSON array of tasks. Each task must have exactly these fields:\n"
+                            + "- title: string\n"
+                            + "- description: string\n"
+                            + "- role: must be exactly one of: ENGINEER, RESEARCHER, SALES, FINANCE\n"
+                            + "- priority: must be exactly one of: CRITICAL, HIGH, NORMAL, LOW\n"
+                            + "- estimatedRevenue: number (e.g. 0.0, 50.0)\n\n"
+                            + "Return ONLY the JSON array, no markdown, no explanation.\n\n"
+                            + "Goal: " + goal,
                     true));
             System.out.println("=== PLANNING RESPONSE status=" + response.status() + " contentLength=" + (response.content() == null ? "null" : response.content().length()));
             if (response.content() != null) {
@@ -75,9 +82,35 @@ public final class PlanningEngine {
                     if (tasks.size() >= constraints.maxTasksPerGoal()) {
                         throw new IllegalStateException("maxTasksPerGoal exceeded");
                     }
-                    AgentRole role = AgentRole.valueOf(node.path("role").asText("RESEARCHER"));
-                    TaskPriority priority = TaskPriority.valueOf(node.path("priority").asText("NORMAL"));
-                    double expectedRevenue = node.path("estimatedRevenue").asDouble(0.0d);
+                    AgentRole role;
+                    try {
+                        role = AgentRole.valueOf(
+                                node.path("role").asText("RESEARCHER")
+                                        .toUpperCase()
+                                        .trim()
+                        );
+                    } catch (IllegalArgumentException ex) {
+                        role = AgentRole.RESEARCHER;
+                    }
+                    TaskPriority priority;
+                    try {
+                        priority = TaskPriority.valueOf(
+                                node.path("priority").asText("NORMAL")
+                                        .toUpperCase()
+                                        .trim()
+                        );
+                    } catch (IllegalArgumentException ex) {
+                        priority = TaskPriority.NORMAL;
+                    }
+                    String revStr = node.path("estimatedRevenue").asText("0");
+                    double expectedRevenue;
+                    try {
+                        expectedRevenue = Double.parseDouble(
+                                revStr.replaceAll("[^0-9.]", "")
+                        );
+                    } catch (NumberFormatException ex) {
+                        expectedRevenue = 0.0;
+                    }
                     Task seed = Task.create(node.path("title").asText("Untitled"), node.path("description").asText(""),
                             role, priority, goal, 0.0d, expectedRevenue);
                     CostEstimator.Estimate estimate = costEstimator.estimate(role, seed);
