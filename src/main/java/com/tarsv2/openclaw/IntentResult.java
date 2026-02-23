@@ -33,4 +33,13 @@ public record IntentResult(
     public static IntentResult failure(String intentId, String error, long latencyMs) {
         return new IntentResult(intentId, false, Map.of(), null, error, latencyMs, Instant.now());
     }
+
+    public String message() {
+        return summary();
+    }
+
+    public String output() {
+        Object content = data() != null ? data().get("content") : null;
+        return content != null ? content.toString() : summary();
+    }
 }
