@@ -17,6 +17,7 @@ public final class ResearchOrchestrator {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String INVALID_JSON_ERROR = "{\"error\":\"INVALID_JSON\"}";
     private static final String INSUFFICIENT_CONTEXT_ERROR = "{\"error\":\"INSUFFICIENT_CONTEXT\"}";
+    private static final String NOT_IMPLEMENTED_ERROR = "{\"error\":\"NOT_IMPLEMENTED\"}";
     private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("LOW", "MODERATE", "HIGH");
 
     private final ReasoningModelClient glmClient;
@@ -36,6 +37,12 @@ public final class ResearchOrchestrator {
     }
 
     public String research(String userInput) {
+        // Feature flag short-circuit: must execute before validation
+        // Required by ResearchOrchestratorTest contract
+        if (!researchModelEnabled()) {
+            return NOT_IMPLEMENTED_ERROR;
+        }
+
         String topic = normalize(userInput);
         if (isInsufficientContext(topic)) {
             return INSUFFICIENT_CONTEXT_ERROR;
@@ -47,13 +54,13 @@ public final class ResearchOrchestrator {
             ModelResponse routed = modelRouter.route(RoutingMode.RESEARCH,
                     new ModelRequest("Research mode", prompt, true));
             if (routed.status() == ModelResponse.Status.NOT_IMPLEMENTED) {
-                return "{\"error\":\"NOT_IMPLEMENTED\"}";
+                return NOT_IMPLEMENTED_ERROR;
             }
             raw = routed.status() == ModelResponse.Status.OK ? routed.content() : "";
         } else {
             raw = glmClient.chat(prompt);
             if (raw.startsWith("[NOT_IMPLEMENTED]")) {
-                return "{\"error\":\"NOT_IMPLEMENTED\"}";
+                return NOT_IMPLEMENTED_ERROR;
             }
         }
 
@@ -108,6 +115,23 @@ public final class ResearchOrchestrator {
 
     private String normalize(String input) {
         return input == null ? "" : input.trim();
+    }
+
+    private boolean researchModelEnabled() {
+        return isResearchEnvEnabled("TARS_MODEL_RESEARCH") && isResearchEnvEnabled("TARS_GLM_RESEARCH_MODEL");
+    }
+
+    private boolean isResearchEnvEnabled(String key) {
+        String value = System.getenv(key);
+        if (value == null) {
+            return true;
+        }
+        String normalized = value.trim().toLowerCase();
+        return !normalized.isEmpty()
+                && !normalized.equals("off")
+                && !normalized.equals("none")
+                && !normalized.equals("disabled")
+                && !normalized.equals("false");
     }
 
     private boolean isInsufficientContext(String input) {
