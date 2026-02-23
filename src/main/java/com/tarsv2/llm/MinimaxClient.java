@@ -8,6 +8,7 @@ import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -25,12 +26,12 @@ public final class MinimaxClient implements ReasoningModelClient {
     public MinimaxClient(String endpoint, String model, Duration timeout) {
         this.endpoint = Objects.requireNonNull(endpoint);
         this.model = Objects.requireNonNull(model);
-        Duration safeTimeout = timeout == null ? Duration.ofSeconds(45) : timeout;
+        Duration safeTimeout = timeout == null ? Duration.ofSeconds(60) : timeout;
         this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(Math.min(10_000, safeTimeout.toMillis()), TimeUnit.MILLISECONDS)
-                .readTimeout(safeTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                .writeTimeout(Math.min(30_000, safeTimeout.toMillis()), TimeUnit.MILLISECONDS)
-                .callTimeout(safeTimeout.toMillis(), TimeUnit.MILLISECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(Math.max(60, safeTimeout.toSeconds()), TimeUnit.SECONDS)
                 .build();
     }
 
@@ -47,6 +48,8 @@ public final class MinimaxClient implements ReasoningModelClient {
     private String execute(String prompt, double temperature) {
         try {
             String requestBody = buildRequestBody(prompt, temperature);
+            log.info("MiniMax endpoint URL: {}", endpoint);
+            log.info("MiniMax request body: {}", requestBody);
             Request.Builder reqBuilder = new Request.Builder()
                     .url(endpoint)
                     .post(RequestBody.create(requestBody, JSON_MEDIA));
@@ -67,24 +70,35 @@ public final class MinimaxClient implements ReasoningModelClient {
                 }
                 return parseContent(body.string());
             }
+        } catch (SocketTimeoutException timeoutException) {
+            log.warn("MiniMax timeout: {}", timeoutException.getMessage());
+            return structuredError(LlmErrorType.TIMEOUT, "MINIMAX");
         } catch (Exception e) {
             log.warn("MiniMax call failed: {}", e.getMessage());
-            return "[ERROR] " + e.getMessage();
+            return structuredError(LlmErrorType.NETWORK, "MINIMAX");
         }
     }
 
     private String buildRequestBody(String prompt, double temperature) throws Exception {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", model);
-        root.put("temperature", temperature);
-        root.put("stream", false);
-
         ArrayNode messages = root.putArray("messages");
         ObjectNode user = messages.addObject();
         user.put("role", "user");
         user.put("content", prompt);
 
         return MAPPER.writeValueAsString(root);
+    }
+
+    private String structuredError(LlmErrorType errorType, String provider) {
+        ObjectNode error = MAPPER.createObjectNode();
+        error.put("error_type", errorType.name());
+        error.put("provider", provider);
+        try {
+            return MAPPER.writeValueAsString(error);
+        } catch (Exception ignored) {
+            return "{\"error_type\":\"UNKNOWN\",\"provider\":\"" + provider + "\"}";
+        }
     }
 
     private String parseContent(String rawJson) {

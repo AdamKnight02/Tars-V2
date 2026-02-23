@@ -8,6 +8,7 @@ import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.SocketTimeoutException;
 import java.util.concurrent.TimeUnit;
 
 public final class GlmClient implements ReasoningModelClient {
@@ -27,9 +28,9 @@ public final class GlmClient implements ReasoningModelClient {
         String envModel = System.getenv("TARS_GLM_RESEARCH_MODEL");
         this.model = (envModel != null && !envModel.isBlank()) ? envModel : "glm-5";
         this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
                 .callTimeout(90, TimeUnit.SECONDS)
                 .build();
     }
@@ -53,13 +54,7 @@ public final class GlmClient implements ReasoningModelClient {
 
             ObjectNode root = MAPPER.createObjectNode();
             root.put("model", model);
-            root.put("temperature", temperature);
-            root.put("stream", false);
-
             ArrayNode messages = root.putArray("messages");
-            ObjectNode system = messages.addObject();
-            system.put("role", "system");
-            system.put("content", "You are a helpful AI assistant.");
             ObjectNode user = messages.addObject();
             user.put("role", "user");
             user.put("content", prompt);
@@ -80,31 +75,45 @@ public final class GlmClient implements ReasoningModelClient {
                 if (!response.isSuccessful()) {
                     log.warn("GLM API returned HTTP {}: {}", response.code(), raw);
                     if (isModelUnavailable(response.code(), raw)) {
-                        return "[NOT_IMPLEMENTED] Research model unavailable";
+                        return structuredError(LlmErrorType.BILLING, "GLM");
                     }
                     throw new IllegalStateException("GLM API returned HTTP " + response.code() + ": " + raw);
                 }
                 return parseContent(raw);
             }
+        } catch (SocketTimeoutException timeoutException) {
+            log.warn("GLM timeout: {}", timeoutException.getMessage());
+            return structuredError(LlmErrorType.TIMEOUT, "GLM");
         } catch (Exception e) {
             if (isModelUnavailable(e.getMessage())) {
-                log.warn("GLM call unavailable: {}", e.getMessage());
-                return "[NOT_IMPLEMENTED] Research model unavailable";
+                log.warn("GLM call billing issue: {}", e.getMessage());
+                return structuredError(LlmErrorType.BILLING, "GLM");
             }
             log.warn("GLM call failed: {}", e.getMessage());
-            return "[ERROR] " + e.getMessage();
+            return structuredError(LlmErrorType.NETWORK, "GLM");
         }
     }
 
     private boolean isModelUnavailable(int statusCode, String rawBody) {
-        return statusCode == 429 && rawBody != null && rawBody.contains("\"code\":\"1113\"");
+        return statusCode == 429 && rawBody != null && (rawBody.contains("\"code\":\"1113\"") || rawBody.contains("\"code\":1113"));
     }
 
     private boolean isModelUnavailable(String message) {
         if (message == null || message.isBlank()) {
             return false;
         }
-        return message.contains("Missing GLM API key") || message.contains("HTTP 429") && message.contains("\"code\":\"1113\"");
+        return message.contains("Missing GLM API key") || (message.contains("HTTP 429") && (message.contains("\"code\":\"1113\"") || message.contains("\"code\":1113")));
+    }
+
+    private String structuredError(LlmErrorType errorType, String provider) {
+        ObjectNode error = MAPPER.createObjectNode();
+        error.put("error_type", errorType.name());
+        error.put("provider", provider);
+        try {
+            return MAPPER.writeValueAsString(error);
+        } catch (Exception ignored) {
+            return "{\"error_type\":\"UNKNOWN\",\"provider\":\"" + provider + "\"}";
+        }
     }
 
     private String parseContent(String rawJson) {
