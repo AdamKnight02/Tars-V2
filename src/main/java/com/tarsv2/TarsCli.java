@@ -186,7 +186,7 @@ public final class TarsCli implements Runnable {
         ModelRouter modelRouter = new DefaultModelRouter(ModelConfig.fromEnvironment(), Map.of(
                 "m2.5", request -> ModelResponse.ok(minimaxClient.generateDeterministicDiff(request.userPrompt())),
                 "minimax-chat", request -> ModelResponse.ok(minimaxClient.chat(request.userPrompt())),
-                "glm-research", request -> ModelResponse.ok(glmClient.chat(request.userPrompt()))
+                "glm-5", request -> ModelResponse.ok(glmClient.chat(request.userPrompt()))
         ));
         SingleModelOrchestrator orchestrator = new SingleModelOrchestrator(minimaxClient, dialogue);
 
