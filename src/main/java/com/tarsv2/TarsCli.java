@@ -56,6 +56,8 @@ import java.nio.file.Paths;
 import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * TARS v2 — Main CLI entry point.
@@ -85,6 +87,7 @@ public final class TarsCli implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(TarsCli.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Pattern OPENCLAW_KEY_VALUE_PATTERN = Pattern.compile("(\\w+)=((\"[^\"]*\")|\\S+)");
 
     private record ProposedChange(String summary, String diff, String rationale) {}
 
@@ -698,7 +701,7 @@ public final class TarsCli implements Runnable {
             return;
         }
 
-        String[] tokens = input.trim().split("\\s+");
+        String[] tokens = input.trim().split("\\s+", 3);
         if (tokens.length < 2) {
             System.out.println("[openclaw] Usage: oc <INTENT_TYPE> key=value ...");
             return;
@@ -713,16 +716,30 @@ public final class TarsCli implements Runnable {
         }
 
         IntentPayload.Builder payloadBuilder = IntentPayload.builder();
-        for (int i = 2; i < tokens.length; i++) {
-            String token = tokens[i];
-            int equalsAt = token.indexOf('=');
-            if (equalsAt <= 0 || equalsAt == token.length() - 1) {
-                System.out.println("[openclaw] Invalid key=value pair: " + token);
+        if (tokens.length >= 3) {
+            String payloadInput = tokens[2];
+            Matcher matcher = OPENCLAW_KEY_VALUE_PATTERN.matcher(payloadInput);
+            int lastMatchEnd = 0;
+
+            while (matcher.find()) {
+                String betweenMatches = payloadInput.substring(lastMatchEnd, matcher.start()).trim();
+                if (!betweenMatches.isEmpty()) {
+                    System.out.println("[openclaw] Invalid key=value pair: " + betweenMatches);
+                    return;
+                }
+
+                String key = matcher.group(1);
+                String rawValue = matcher.group(2);
+                String value = rawValue.replaceAll("^\"|\"$", "");
+                payloadBuilder.put(key, value);
+                lastMatchEnd = matcher.end();
+            }
+
+            String trailing = payloadInput.substring(lastMatchEnd).trim();
+            if (!trailing.isEmpty()) {
+                System.out.println("[openclaw] Invalid key=value pair: " + trailing);
                 return;
             }
-            String key = token.substring(0, equalsAt);
-            String value = token.substring(equalsAt + 1);
-            payloadBuilder.put(key, value);
         }
 
         Intent intent = new Intent(
