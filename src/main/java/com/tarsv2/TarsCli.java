@@ -23,6 +23,11 @@ import com.tarsv2.model.router.DefaultModelRouter;
 import com.tarsv2.model.router.ModelRouter;
 import com.tarsv2.workforce.WorkforceBootstrap;
 import com.tarsv2.workforce.orchestration.WorkforceManager;
+import com.tarsv2.openclaw.Intent;
+import com.tarsv2.openclaw.IntentContext;
+import com.tarsv2.openclaw.IntentPayload;
+import com.tarsv2.openclaw.IntentResult;
+import com.tarsv2.openclaw.IntentType;
 import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.personality.*;
 import com.tarsv2.podman.PodmanController;
@@ -116,6 +121,7 @@ public final class TarsCli implements Runnable {
     private String task;
 
     private WorkforceManager workforceManager;
+    private OpenClawClient openClaw;
 
     /**
      * Main entry point.
@@ -231,6 +237,7 @@ public final class TarsCli implements Runnable {
                 new com.tarsv2.workforce.persistence.h2.H2LedgerRepository(openClawDb.getDataSource())
         );
         OpenClawClient openClaw = new OpenClawClient(envRegistry, permissions, dialogue, openClawEconomicEngine);
+        this.openClaw = openClaw;
         dialogue.say("OpenClaw execution layer online. TARS produces intents, OpenClaw executes.", DialogueStyle.OutputMode.CHAT);
 
         // ── Memory System ───────────────────────────────────────
@@ -658,6 +665,9 @@ public final class TarsCli implements Runnable {
                         } catch (IllegalArgumentException ex) {
                             System.out.println("[research] Friendly error: " + ex.getMessage());
                         }
+                    } else if (input.startsWith("oc ")) {
+                        handleOpenClawCommand(input);
+                        continue;
                     } else if (!input.isEmpty()) {
                         String reply = chatOrchestrator.chat(input);
                         System.out.println("[TARS] " + reply);
@@ -680,6 +690,51 @@ public final class TarsCli implements Runnable {
             System.out.println("[codex] Sorry, something went wrong while generating the diff.");
             log.error("Codex diff mode failed", e);
         }
+    }
+
+    private void handleOpenClawCommand(String input) {
+        if (openClaw == null) {
+            System.out.println("[openclaw] Client unavailable.");
+            return;
+        }
+
+        String[] tokens = input.trim().split("\\s+");
+        if (tokens.length < 2) {
+            System.out.println("[openclaw] Usage: oc <INTENT_TYPE> key=value ...");
+            return;
+        }
+
+        IntentType intentType;
+        try {
+            intentType = IntentType.valueOf(tokens[1].toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            System.out.println("[openclaw] Unknown intent type: " + tokens[1]);
+            return;
+        }
+
+        IntentPayload.Builder payloadBuilder = IntentPayload.builder();
+        for (int i = 2; i < tokens.length; i++) {
+            String token = tokens[i];
+            int equalsAt = token.indexOf('=');
+            if (equalsAt <= 0 || equalsAt == token.length() - 1) {
+                System.out.println("[openclaw] Invalid key=value pair: " + token);
+                return;
+            }
+            String key = token.substring(0, equalsAt);
+            String value = token.substring(equalsAt + 1);
+            payloadBuilder.put(key, value);
+        }
+
+        Intent intent = new Intent(
+                intentType,
+                payloadBuilder.build(),
+                new IntentContext("coding-sandbox", "Tars-V2", 0.0d, 0.8d, Set.of())
+        );
+
+        IntentResult result = openClaw.execute(intent);
+        System.out.println("success: " + result.success());
+        System.out.println("summary: " + result.summary());
+        System.out.println("data: " + result.data());
     }
 
 
