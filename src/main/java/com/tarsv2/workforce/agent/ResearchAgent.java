@@ -1,32 +1,40 @@
 package com.tarsv2.workforce.agent;
 
-import com.tarsv2.llm.ResearchOrchestrator;
+import com.tarsv2.openclaw.Intent;
+import com.tarsv2.openclaw.IntentContext;
+import com.tarsv2.openclaw.IntentPayload;
+import com.tarsv2.openclaw.IntentType;
 import com.tarsv2.workforce.economics.CostEstimator;
 import com.tarsv2.workforce.task.Task;
-import com.tarsv2.workforce.task.TaskResult;
 
-import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 
 public final class ResearchAgent implements WorkforceAgent {
 
-    private final ResearchOrchestrator researchOrchestrator;
     private final CostEstimator costEstimator;
 
-    public ResearchAgent(ResearchOrchestrator researchOrchestrator, CostEstimator costEstimator) {
-        this.researchOrchestrator = Objects.requireNonNull(researchOrchestrator);
+    public ResearchAgent(CostEstimator costEstimator) {
         this.costEstimator = Objects.requireNonNull(costEstimator);
     }
 
     @Override public String getName() { return "ResearchAgent"; }
     @Override public AgentRole getRole() { return AgentRole.RESEARCHER; }
-    @Override public String getDescription() { return "Runs research and returns structured analysis"; }
+    @Override public String getDescription() { return "Produces research intents for OpenClaw execution"; }
     @Override public CostEstimator.Estimate estimateCost(Task task) { return costEstimator.estimate(getRole(), task); }
 
     @Override
-    public TaskResult execute(Task task) {
-        String result = researchOrchestrator.research(task.description());
-        return new TaskResult(task.id(), true, result, null, Instant.now(), 0, 0, "GLM-5");
+    public List<Intent> plan(Task task) {
+        CostEstimator.Estimate estimate = estimateCost(task);
+        Intent intent = new Intent(
+                IntentType.REASON,
+                IntentPayload.builder()
+                        .put("prompt", "Research task: " + task.description())
+                        .put("taskId", task.id().toString())
+                        .build(),
+                new IntentContext("research-sandbox", "Tars-V2", estimate.estimatedCostUsd(), 0.75, java.util.Set.of())
+        );
+        return List.of(intent);
     }
 
     @Override

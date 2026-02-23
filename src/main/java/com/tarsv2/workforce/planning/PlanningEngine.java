@@ -2,15 +2,16 @@ package com.tarsv2.workforce.planning;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tarsv2.model.ModelRequest;
-import com.tarsv2.model.ModelResponse;
-import com.tarsv2.model.router.ModelRouter;
-import com.tarsv2.model.router.RoutingMode;
+import com.tarsv2.openclaw.Intent;
+import com.tarsv2.openclaw.IntentContext;
+import com.tarsv2.openclaw.IntentPayload;
+import com.tarsv2.openclaw.IntentResult;
+import com.tarsv2.openclaw.IntentType;
+import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.workforce.agent.AgentRole;
 import com.tarsv2.workforce.economics.CostEstimator;
 import com.tarsv2.workforce.task.Task;
 import com.tarsv2.workforce.task.TaskPriority;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,55 +19,47 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 public final class PlanningEngine {
 
     private static final Logger log = LoggerFactory.getLogger(PlanningEngine.class);
 
-    private final ModelRouter modelRouter;
+    private final OpenClawClient openClaw;
     private final PlanningConstraints constraints;
     private final CostEstimator costEstimator;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public PlanningEngine(ModelRouter modelRouter, PlanningConstraints constraints, CostEstimator costEstimator) {
-        this.modelRouter = Objects.requireNonNull(modelRouter);
+    public PlanningEngine(OpenClawClient openClaw, PlanningConstraints constraints, CostEstimator costEstimator) {
+        this.openClaw = Objects.requireNonNull(openClaw);
         this.constraints = Objects.requireNonNull(constraints);
         this.costEstimator = Objects.requireNonNull(costEstimator);
     }
 
     public GoalDecomposition plan(String goal) {
-        System.out.println("=== PLANNING ENGINE START === goal: " + goal);
         int calls = 0;
         List<Task> tasks = new ArrayList<>();
         while (calls < constraints.maxPlanningCallsPerGoal()) {
             calls++;
-            ModelResponse response = modelRouter.route(RoutingMode.RESEARCH, new ModelRequest(
-                    "You are a planning engine.",
-                    "Decompose this goal into a JSON array of tasks. Each task must have exactly these fields:\n"
-                            + "- title: string\n"
-                            + "- description: string\n"
-                            + "- role: must be exactly one of: ENGINEER, RESEARCHER, SALES, FINANCE\n"
-                            + "- priority: must be exactly one of: CRITICAL, HIGH, NORMAL, LOW\n"
-                            + "- estimatedRevenue: number (e.g. 0.0, 50.0)\n\n"
-                            + "Return ONLY the JSON array, no markdown, no explanation.\n\n"
-                            + "Goal: " + goal,
-                    true));
-            System.out.println("=== PLANNING RESPONSE status=" + response.status() + " contentLength=" + (response.content() == null ? "null" : response.content().length()));
-            if (response.content() != null) {
-                System.out.println("=== FIRST 300 CHARS: " + response.content().substring(0, Math.min(300, response.content().length())));
-            }
-            log.debug("Planning model response status: {}, content preview: {}",
-                    response.status(), response.content() == null ? null : response.content().substring(0, Math.min(500, response.content().length())));
-            if (response.status() != ModelResponse.Status.OK) {
+            Intent intent = new Intent(
+                    IntentType.REASON,
+                    IntentPayload.builder()
+                            .put("prompt", "Decompose goal into JSON tasks: " + goal)
+                            .build(),
+                    new IntentContext("coding-sandbox", "Tars-V2", 0.02d, 0.8d, Set.of())
+            );
+            IntentResult response = openClaw.execute(intent);
+            if (!response.success()) {
                 break;
             }
             try {
-                String raw = response.content().trim();
-                // Strip markdown code fences if present
+                String raw = response.output().getOrDefault("content", "[]").trim();
+                if (raw.isBlank()) {
+                    break;
+                }
                 if (raw.startsWith("```")) {
                     raw = raw.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
                 }
-                // Find the JSON array in the response
                 int start = raw.indexOf('[');
                 int end = raw.lastIndexOf(']');
                 if (start == -1 || end == -1 || end <= start) {
@@ -84,30 +77,20 @@ public final class PlanningEngine {
                     }
                     AgentRole role;
                     try {
-                        role = AgentRole.valueOf(
-                                node.path("role").asText("RESEARCHER")
-                                        .toUpperCase()
-                                        .trim()
-                        );
+                        role = AgentRole.valueOf(node.path("role").asText("RESEARCHER").toUpperCase().trim());
                     } catch (IllegalArgumentException ex) {
                         role = AgentRole.RESEARCHER;
                     }
                     TaskPriority priority;
                     try {
-                        priority = TaskPriority.valueOf(
-                                node.path("priority").asText("NORMAL")
-                                        .toUpperCase()
-                                        .trim()
-                        );
+                        priority = TaskPriority.valueOf(node.path("priority").asText("NORMAL").toUpperCase().trim());
                     } catch (IllegalArgumentException ex) {
                         priority = TaskPriority.NORMAL;
                     }
                     String revStr = node.path("estimatedRevenue").asText("0");
                     double expectedRevenue;
                     try {
-                        expectedRevenue = Double.parseDouble(
-                                revStr.replaceAll("[^0-9.]", "")
-                        );
+                        expectedRevenue = Double.parseDouble(revStr.replaceAll("[^0-9.]", ""));
                     } catch (NumberFormatException ex) {
                         expectedRevenue = 0.0;
                     }
@@ -120,9 +103,7 @@ public final class PlanningEngine {
                 }
                 break;
             } catch (Exception e) {
-                System.out.println("=== PARSE FAILED: " + e.getMessage());
                 log.error("Failed to parse planning response", e);
-                log.error("Raw response was: {}", response.content().substring(0, Math.min(500, response.content().length())));
                 return new GoalDecomposition(goal, List.of(), Instant.now(), calls);
             }
         }

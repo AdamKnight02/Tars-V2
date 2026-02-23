@@ -216,11 +216,21 @@ public final class TarsCli implements Runnable {
         // ── Environment Registry (ALE-style) ────────────────────
         EnvironmentRegistry envRegistry = new EnvironmentRegistry();
         SandboxDispatcher sandboxDispatcher = new SandboxDispatcher(sandbox, approvalGate);
-        EnvironmentFactory.registerAll(envRegistry, sandboxDispatcher);
+        LLMDispatcher llmDispatcher = new LLMDispatcher();
+        CompositeDispatcher compositeDispatcher = new CompositeDispatcher(llmDispatcher, sandboxDispatcher);
+        EnvironmentFactory.registerAll(envRegistry, compositeDispatcher);
         dialogue.say("Environments: " + envRegistry.size() + " registered (ALE-pinned).", DialogueStyle.OutputMode.CHAT);
 
         // ── OpenClaw Execution Layer ────────────────────────────
-        OpenClawClient openClaw = new OpenClawClient(envRegistry, permissions, dialogue);
+        com.tarsv2.workforce.persistence.DatabaseManager openClawDb = new com.tarsv2.workforce.persistence.DatabaseManager();
+        openClawDb.initialize();
+        com.tarsv2.workforce.economics.EconomicEngine openClawEconomicEngine = new com.tarsv2.workforce.economics.EconomicEngine(
+                new com.tarsv2.workforce.economics.CostEstimator(),
+                new com.tarsv2.workforce.economics.ProfitabilityGate(),
+                new com.tarsv2.workforce.economics.ModelUsageTracker(),
+                new com.tarsv2.workforce.persistence.h2.H2LedgerRepository(openClawDb.getDataSource())
+        );
+        OpenClawClient openClaw = new OpenClawClient(envRegistry, permissions, dialogue, openClawEconomicEngine);
         dialogue.say("OpenClaw execution layer online. TARS produces intents, OpenClaw executes.", DialogueStyle.OutputMode.CHAT);
 
         // ── Memory System ───────────────────────────────────────
@@ -487,7 +497,7 @@ public final class TarsCli implements Runnable {
                         try {
                             workforceManager = WorkforceBootstrap.initialize(
                                     modelRouter, codexOrchestrator, researchOrchestrator, chatOrchestrator,
-                                    approvalGate, proposalRegistry, patchValidator
+                                    approvalGate, proposalRegistry, patchValidator, openClaw
                             );
                             workforceManager.start();
                             dialogue.say("Workforce OS online. Use 'goal <description>' to submit work.", DialogueStyle.OutputMode.SYSTEM);

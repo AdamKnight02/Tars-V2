@@ -1,7 +1,11 @@
 package com.tarsv2.workforce.scheduler;
 
+import com.tarsv2.openclaw.Intent;
+import com.tarsv2.openclaw.IntentResult;
+import com.tarsv2.openclaw.OpenClawClient;
 import com.tarsv2.workforce.economics.EconomicEngine;
 import com.tarsv2.workforce.economics.ModelUsageTracker;
+import com.tarsv2.workforce.exploration.ExplorationEngine;
 import com.tarsv2.workforce.orchestration.AgentDispatcher;
 import com.tarsv2.workforce.persistence.TaskRepository;
 import com.tarsv2.workforce.task.Task;
@@ -9,6 +13,7 @@ import com.tarsv2.workforce.task.TaskQueue;
 import com.tarsv2.workforce.task.TaskResult;
 import com.tarsv2.workforce.task.TaskStatus;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -20,6 +25,8 @@ public final class WorkforceScheduler {
     private final TaskQueue taskQueue;
     private final AgentDispatcher dispatcher;
     private final EconomicEngine economicEngine;
+    private final OpenClawClient openClaw;
+    private final ExplorationEngine explorationEngine;
     private final TaskRepository taskRepository;
     private final ExecutionGuard guard;
     private final SchedulerConfig config;
@@ -33,12 +40,16 @@ public final class WorkforceScheduler {
     public WorkforceScheduler(TaskQueue taskQueue,
                               AgentDispatcher dispatcher,
                               EconomicEngine economicEngine,
+                              OpenClawClient openClaw,
+                              ExplorationEngine explorationEngine,
                               TaskRepository taskRepository,
                               ExecutionGuard guard,
                               SchedulerConfig config) {
         this.taskQueue = Objects.requireNonNull(taskQueue);
         this.dispatcher = Objects.requireNonNull(dispatcher);
         this.economicEngine = Objects.requireNonNull(economicEngine);
+        this.openClaw = Objects.requireNonNull(openClaw);
+        this.explorationEngine = Objects.requireNonNull(explorationEngine);
         this.taskRepository = Objects.requireNonNull(taskRepository);
         this.guard = Objects.requireNonNull(guard);
         this.config = Objects.requireNonNull(config);
@@ -74,6 +85,9 @@ public final class WorkforceScheduler {
                     Thread.sleep(config.pollIntervalSeconds() * 1000L);
                     continue;
                 }
+                if (taskQueue.peek().isEmpty() && explorationEngine.canExplore()) {
+                    explorationEngine.generateExplorationTasks().forEach(taskQueue::enqueue);
+                }
                 List<Task> batch = new ArrayList<>();
                 for (int i = 0; i < config.maxConcurrentTasks(); i++) {
                     taskQueue.dequeue().ifPresent(batch::add);
@@ -103,11 +117,13 @@ public final class WorkforceScheduler {
                 taskRepository.update(dispatched);
                 Task executing = dispatched.withStatus(TaskStatus.EXECUTING);
                 taskRepository.update(executing);
-                TaskResult result = dispatcher.dispatch(executing);
+
+                TaskResult result = executePlannedIntents(executing);
+
                 if (result.success()) {
                     ModelUsageTracker.Usage usage = new ModelUsageTracker.Usage(result.modelUsed(), result.inputTokensUsed(), result.outputTokensUsed(), 1);
                     economicEngine.recordCost(task.id(), usage);
-                    TaskStatus successStatus = result.output().contains("awaiting approval") ? TaskStatus.AWAITING_APPROVAL : TaskStatus.COMPLETED;
+                    TaskStatus successStatus = result.output().contains("approval") ? TaskStatus.AWAITING_APPROVAL : TaskStatus.COMPLETED;
                     taskRepository.update(executing.withStatus(successStatus));
                     totalExecuted.incrementAndGet();
                     guard.recordSuccess();
@@ -125,6 +141,28 @@ public final class WorkforceScheduler {
                 inFlight.decrementAndGet();
             }
         });
+    }
+
+    private TaskResult executePlannedIntents(Task task) {
+        List<Intent> intents = dispatcher.plan(task);
+        if (intents.isEmpty()) {
+            return new TaskResult(task.id(), false, "", "No capable agent", Instant.now(), 0, 0, "none");
+        }
+        StringBuilder output = new StringBuilder();
+        String model = "openclaw";
+        for (Intent intent : intents) {
+            IntentResult result = openClaw.execute(intent);
+            if (!result.success()) {
+                return new TaskResult(task.id(), false, output.toString(), result.message(), Instant.now(), 0, 0, model);
+            }
+            if (!result.message().isBlank()) {
+                if (output.length() > 0) {
+                    output.append('\n');
+                }
+                output.append(result.message());
+            }
+        }
+        return new TaskResult(task.id(), true, output.toString(), null, Instant.now(), 0, 0, model);
     }
 
     public record SchedulerHealth(boolean running, boolean circuitBreakerOpen, int tasksInFlight, int totalExecuted, int totalFailed) {

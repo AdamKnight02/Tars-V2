@@ -27,7 +27,8 @@ public final class EnvironmentFactory {
         return new ExecutionEnvironment(
                 "coding-sandbox",
                 "General-purpose coding sandbox with file, git, and test tools",
-                Set.of("READ_FILE", "WRITE_FILE", "GENERATE_DIFF", "APPLY_PATCH",
+                Set.of("REASON", "EVALUATE", "ANALYZE_CODE",
+                        "READ_FILE", "WRITE_FILE", "GENERATE_DIFF", "APPLY_PATCH",
                         "RUN_COMMAND", "RUN_TESTS", "CREATE_BRANCH", "COMMIT",
                         "OPEN_PR", "COMMENT_PR", "QUERY_CI", "MEMORY_READ", "MEMORY_WRITE"),
                 Map.of("sandbox.type", "coding", "git.enabled", "true"),
@@ -66,6 +67,21 @@ public final class EnvironmentFactory {
         );
     }
 
+
+    /**
+     * Creates a read-only research-sandbox environment.
+     */
+    public static ExecutionEnvironment researchSandbox(EnvironmentDispatcher dispatcher) {
+        return new ExecutionEnvironment(
+                "research-sandbox",
+                "Read-only research sandbox for controlled exploration and analysis",
+                Set.of("REASON", "EVALUATE", "ANALYZE_CODE", "READ_FILE", "MEMORY_READ"),
+                Map.of("sandbox.type", "research", "git.enabled", "false", "write.enabled", "false"),
+                ResourceLimits.restricted(),
+                dispatcher
+        );
+    }
+
     /**
      * Registers all standard environments into the given registry.
      */
@@ -73,6 +89,7 @@ public final class EnvironmentFactory {
         registry.register(codingSandbox(dispatcher));
         registry.register(resumeSandbox(dispatcher));
         registry.register(depopSandbox(dispatcher));
+        registry.register(researchSandbox(dispatcher));
         log.info("Registered {} standard environments", registry.size());
     }
 }

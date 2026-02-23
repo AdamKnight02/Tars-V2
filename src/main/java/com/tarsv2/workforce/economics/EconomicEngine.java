@@ -31,6 +31,32 @@ public final class EconomicEngine {
         return profitabilityGate.isViable(task, estimate);
     }
 
+
+    public boolean canAfford(double estimatedCost) {
+        return getTodaySpent() + Math.max(0.0d, estimatedCost) <= getDailyBudgetUsd();
+    }
+
+    public double getTodaySpent() {
+        Instant now = Instant.now();
+        Instant dayStart = now.truncatedTo(java.time.temporal.ChronoUnit.DAYS);
+        return ledgerRepository.findAllCosts().stream()
+                .filter(c -> !c.recordedAt().isBefore(dayStart))
+                .mapToDouble(CostLedger::costUsd)
+                .sum();
+    }
+
+    private double getDailyBudgetUsd() {
+        String raw = System.getenv("TARS_DAILY_BUDGET_USD");
+        if (raw == null || raw.isBlank()) {
+            return 5.00d;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException ignored) {
+            return 5.00d;
+        }
+    }
+
     public void recordCost(UUID taskId, ModelUsageTracker.Usage usage) {
         usageTracker.record(taskId, usage);
         double cost = costEstimator.calculateActualCost(usage.modelId(), usage.inputTokens(), usage.outputTokens());

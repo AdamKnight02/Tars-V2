@@ -1,11 +1,11 @@
 package com.tarsv2.workforce.orchestration;
 
+import com.tarsv2.openclaw.Intent;
 import com.tarsv2.workforce.agent.AgentRole;
 import com.tarsv2.workforce.agent.WorkforceAgent;
 import com.tarsv2.workforce.task.Task;
-import com.tarsv2.workforce.task.TaskResult;
 
-import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,10 +26,10 @@ public final class AgentDispatcher {
         return Optional.of(agent);
     }
 
-    public TaskResult dispatch(Task task) {
+    public List<Intent> plan(Task task) {
         return findAgent(task)
-                .map(a -> a.execute(task))
-                .orElseGet(() -> new TaskResult(task.id(), false, "", "No capable agent", Instant.now(), 0, 0, "none"));
+                .map(a -> a.plan(task))
+                .orElse(List.of());
     }
 
     public int size() {

@@ -1,67 +1,45 @@
 package com.tarsv2.workforce.agent;
 
-import com.tarsv2.approval.ProposalRegistry;
-import com.tarsv2.codex.CodexOrchestrator;
-import com.tarsv2.codex.PatchProposal;
-import com.tarsv2.codex.PatchValidator;
+import com.tarsv2.openclaw.Intent;
+import com.tarsv2.openclaw.IntentContext;
+import com.tarsv2.openclaw.IntentPayload;
+import com.tarsv2.openclaw.IntentType;
 import com.tarsv2.workforce.economics.CostEstimator;
 import com.tarsv2.workforce.task.Task;
-import com.tarsv2.workforce.task.TaskResult;
 
-import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 
 public final class EngineerAgent implements WorkforceAgent {
 
-    private final CodexOrchestrator codexOrchestrator;
-    private final PatchValidator patchValidator;
-    private final ProposalRegistry proposalRegistry;
     private final CostEstimator costEstimator;
 
-    public EngineerAgent(CodexOrchestrator codexOrchestrator,
-                         PatchValidator patchValidator,
-                         ProposalRegistry proposalRegistry,
-                         CostEstimator costEstimator) {
-        this.codexOrchestrator = Objects.requireNonNull(codexOrchestrator);
-        this.patchValidator = Objects.requireNonNull(patchValidator);
-        this.proposalRegistry = Objects.requireNonNull(proposalRegistry);
+    public EngineerAgent(CostEstimator costEstimator) {
         this.costEstimator = Objects.requireNonNull(costEstimator);
     }
 
     @Override public String getName() { return "EngineerAgent"; }
     @Override public AgentRole getRole() { return AgentRole.ENGINEER; }
-    @Override public String getDescription() { return "Generates deterministic patch proposals for human approval"; }
+    @Override public String getDescription() { return "Produces code-analysis intents for OpenClaw execution"; }
     @Override public CostEstimator.Estimate estimateCost(Task task) { return costEstimator.estimate(getRole(), task); }
 
     @Override
-    public TaskResult execute(Task task) {
-        String targetFile = extractTargetFile(task.description());
-        try {
-            String diff = codexOrchestrator.generateDiffOnly(targetFile, task.description());
-            PatchValidator.ValidationResult validation = patchValidator.validate(diff);
-            PatchProposal proposal = new PatchProposal(UUID.randomUUID(), diff, task.title(), targetFile, PatchProposal.Status.PENDING);
-            proposalRegistry.submit(proposal, validation.referencedFiles(), validation.message());
-            return new TaskResult(task.id(), true,
-                    "Proposal submitted and awaiting approval: " + proposal.getId(), null, Instant.now(), 0, 0, "MiniMax-M2.5");
-        } catch (IOException | IllegalArgumentException e) {
-            return new TaskResult(task.id(), false, "", e.getMessage(), Instant.now(), 0, 0, "MiniMax-M2.5");
-        }
+    public List<Intent> plan(Task task) {
+        CostEstimator.Estimate estimate = estimateCost(task);
+        Intent analyze = new Intent(
+                IntentType.ANALYZE_CODE,
+                IntentPayload.builder()
+                        .put("prompt", "Analyze code task and propose safe deterministic changes: " + task.description())
+                        .put("taskId", task.id().toString())
+                        .build(),
+                new IntentContext("coding-sandbox", "Tars-V2", estimate.estimatedCostUsd(), 0.70, java.util.Set.of())
+        );
+        return List.of(analyze);
     }
 
     @Override
     public boolean canHandle(Task task) {
         String lower = task.description().toLowerCase();
-        return (lower.contains("code") || lower.contains("refactor") || lower.contains("java"))
-                && lower.contains("src/main/java/");
-    }
-
-    private String extractTargetFile(String description) {
-        return List.of(description.split("\\s+")).stream()
-                .filter(s -> s.startsWith("src/main/java/") && s.endsWith(".java"))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("No target file path found in task description"));
+        return lower.contains("code") || lower.contains("refactor") || lower.contains("java");
     }
 }
