@@ -47,7 +47,20 @@ public final class PlanningEngine {
                 break;
             }
             try {
-                JsonNode root = mapper.readTree(response.content());
+                String raw = response.content().trim();
+                // Strip markdown code fences if present
+                if (raw.startsWith("```")) {
+                    raw = raw.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
+                }
+                // Find the JSON array in the response
+                int start = raw.indexOf('[');
+                int end = raw.lastIndexOf(']');
+                if (start == -1 || end == -1 || end <= start) {
+                    log.warn("No JSON array found in planning response: {}", raw.substring(0, Math.min(200, raw.length())));
+                    break;
+                }
+                raw = raw.substring(start, end + 1);
+                JsonNode root = mapper.readTree(raw);
                 if (!root.isArray()) {
                     break;
                 }
@@ -68,6 +81,7 @@ public final class PlanningEngine {
                 break;
             } catch (Exception e) {
                 log.error("Failed to parse planning response", e);
+                log.error("Raw response was: {}", response.content().substring(0, Math.min(500, response.content().length())));
                 return new GoalDecomposition(goal, List.of(), Instant.now(), calls);
             }
         }
